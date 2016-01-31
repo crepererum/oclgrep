@@ -108,6 +108,8 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     );
 
     constexpr std::size_t multi_input_n = 2;
+    constexpr std::size_t group_size = 2;
+
     kernelAutomaton.setArg(0, static_cast<cl_uint>(graph.n));
     kernelAutomaton.setArg(1, static_cast<cl_uint>(graph.m));
     kernelAutomaton.setArg(2, static_cast<cl_uint>(graph.o));
@@ -120,12 +122,14 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
 
     cl::CommandQueue queue(context, devices[0]);
 
-    // XXX: should we use local groups?
     std::size_t totalSize = fcontent.size() / multi_input_n;
     if (fcontent.size() % multi_input_n != 0) {
         totalSize += 1;
     }
-    queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(totalSize), cl::NullRange);
+    if (totalSize % group_size != 0) {
+        totalSize += group_size - totalSize % group_size;
+    }
+    queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(totalSize), cl::NDRange(group_size));
 
     std::vector<uint32_t> output(fcontent.size(), 0);
     queue.enqueueReadBuffer(dOutput, false, 0, fcontent.size() * sizeof(cl_uint), output.data());
