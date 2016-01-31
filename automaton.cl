@@ -2,7 +2,10 @@
 #define ID_OK 1
 #define ID_BEGIN 2
 #define RESULT_FAIL 0xffffffff
+#define MAX_ITER_COUNT 100
 #define MAX_STACK_SIZE 16
+#define FLAG_STACK_FULL 0
+#define FLAG_ITER_MAX 1
 
 uint find_next_slot(uint state, uint element, uint n, uint m, uint o, __constant char* automatonData) {
     uint base_node = state * m * (sizeof(uint) + o * sizeof(uint));
@@ -54,8 +57,19 @@ struct stack_entry {
     uint state;
 };
 
-uint run_until_end(uint pos, uint state, uint n, uint m, uint o, uint size, __constant char* automatonData, __global const char* text, __private struct stack_entry* stack, uint* stack_size) {
-    while (state != ID_FAIL && state != ID_OK && pos < size) {
+uint run_until_end(uint pos,
+                   uint state,
+                   uint n,
+                   uint m,
+                   uint o,
+                   uint size,
+                   __constant char* automatonData,
+                   __global const char* text,
+                   __private struct stack_entry* stack,
+                   uint* stack_size,
+                   uint* iter_count,
+                   __global char* flags) {
+    while (state != ID_FAIL && state != ID_OK && pos < size && *iter_count < MAX_ITER_COUNT) {
         // evaluate current node
         uint element = *((__global const uint*)(text + sizeof(uint) * pos));
         uint base_slot = find_next_slot(state, element, n, m, o, automatonData);
@@ -64,29 +78,45 @@ uint run_until_end(uint pos, uint state, uint n, uint m, uint o, uint size, __co
         // decide what to do next
         if (base_slot != 0) {
             // first decision gues to this "thread"
-            state = state_from_slot(0, base_slot, n, automatonData); // XXX: push other states to stack
+            state = state_from_slot(0, base_slot, n, automatonData);
 
             // all other possibilites go to the stack
             for (uint i = 1; i < o; ++i) {
                 uint state_for_stack = state_from_slot(i, base_slot, n, automatonData);
 
-                // XXX: warn user when stack was full
-                if (state_for_stack != ID_FAIL && *stack_size < MAX_STACK_SIZE) {
-                    // push state to stack
-                    stack[*stack_size].pos = pos;
-                    stack[*stack_size].state = state_for_stack;
-                    *stack_size += 1;
+                if (state_for_stack != ID_FAIL) {
+                    if (*stack_size < MAX_STACK_SIZE) {
+                        // push state to stack
+                        stack[*stack_size].pos = pos;
+                        stack[*stack_size].state = state_for_stack;
+                        *stack_size += 1;
+                    } else {
+                        flags[FLAG_STACK_FULL] = 1;
+                    }
                 }
             }
         } else {
             state = ID_FAIL;
         }
+
+        *iter_count += 1;
+    }
+
+    if (*iter_count >= MAX_ITER_COUNT) {
+        flags[FLAG_ITER_MAX] = 1;
     }
 
     return state;
 }
 
-__kernel void automaton(uint n, uint m, uint o, uint size, __constant char* automatonData, __global const char* text, __global uint* output) {
+__kernel void automaton(uint n,
+                        uint m,
+                        uint o,
+                        uint size,
+                        __constant char* automatonData,
+                        __global const char* text,
+                        __global uint* output,
+                        __global char* flags) {
     uint startpos = get_global_id(0);
     if (startpos < size) {
         // set up stack with inital task
@@ -96,6 +126,7 @@ __kernel void automaton(uint n, uint m, uint o, uint size, __constant char* auto
         stack[0].state = ID_BEGIN;
 
         // run until stack is empty
+        uint iter_count = 0;
         uint result_state = ID_FAIL;
         while (stack_size > 0 && result_state != ID_OK) {
             // pop from stack
@@ -104,7 +135,7 @@ __kernel void automaton(uint n, uint m, uint o, uint size, __constant char* auto
             uint state = stack[stack_size].state;
 
             // run automaton until end and check if that branch was successfull
-            uint candidate = run_until_end(pos, state, n, m, o, size, automatonData, text, stack, &stack_size);
+            uint candidate = run_until_end(pos, state, n, m, o, size, automatonData, text, stack, &stack_size, &iter_count, flags);
             if (candidate == ID_OK) {
                 result_state = ID_OK;
             }

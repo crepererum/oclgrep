@@ -14,6 +14,7 @@
 
 static_assert(sizeof(std::uint32_t) == sizeof(cl_uint), "OpenCL uint has to be 32bit");
 static_assert(sizeof(char32_t) == sizeof(cl_char4), "OpenCL char4 has not the same width as our Unicode characters");
+static_assert(sizeof(char) == sizeof(cl_char), "OpenCL char has not the same size as host char");
 
 
 cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& context, const std::vector<cl::Device>& devices) {
@@ -70,6 +71,11 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     cl::Program programAutomaton = buildProgramFromFile("automaton.cl", context, devices);
     cl::Kernel kernelAutomaton(programAutomaton, "automaton");
 
+    constexpr std::size_t flags_n = 2;
+    constexpr std::size_t flag_stack_full = 0;
+    constexpr std::size_t flag_iter_max = 1;
+    std::vector<char> flags(flags_n, 0);
+
     cl::Buffer dAutomatonData(
         context,
         CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
@@ -91,6 +97,13 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
         nullptr
     );
 
+    cl::Buffer dFlags(
+        context,
+        CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
+        flags.size() * sizeof(char),
+        flags.data()
+    );
+
     kernelAutomaton.setArg(0, static_cast<cl_uint>(graph.n));
     kernelAutomaton.setArg(1, static_cast<cl_uint>(graph.m));
     kernelAutomaton.setArg(2, static_cast<cl_uint>(graph.o));
@@ -98,6 +111,7 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     kernelAutomaton.setArg(4, dAutomatonData);
     kernelAutomaton.setArg(5, dText);
     kernelAutomaton.setArg(6, dOutput);
+    kernelAutomaton.setArg(7, dFlags);
 
     cl::CommandQueue queue(context, devices[0]);
 
@@ -107,7 +121,16 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     std::vector<uint32_t> output(fcontent.size(), 0);
     queue.enqueueReadBuffer(dOutput, false, 0, fcontent.size() * sizeof(cl_uint), output.data());
 
+    queue.enqueueReadBuffer(dFlags, false, 0, flags.size() * sizeof(char), flags.data());
+
     queue.finish();
+
+    if (flags[flag_stack_full]) {
+        throw user_error("Automaton engine error: task stack was full!");
+    }
+    if (flags[flag_iter_max]) {
+        throw user_error("Automaton engine error: reached maximum iteration count!");
+    }
 
     return output;
 }
