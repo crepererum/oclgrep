@@ -7,6 +7,7 @@
 #define FLAG_STACK_FULL 0
 #define FLAG_ITER_MAX 1
 #define SYNC_COUNT 32
+#define OVERSIZE_CACHE 2
 
 bool is_master() {
     return get_local_id(0) == 0;
@@ -63,16 +64,43 @@ struct stack_entry {
     uint state;
 };
 
-bool sync(__local uint* active_count, uint iter_count) {
+bool sync(__local uint* active_count, uint iter_count, uint pos, __local uint* cache, __local uint* base_cache, __global const uint* text) {
     // do not sync every cycle
     if (iter_count % SYNC_COUNT == 0) {
+        // use super safe double barrier
         barrier(CLK_LOCAL_MEM_FENCE);
         uint current_active_count = *active_count;
+        if (is_master()) {
+            *base_cache = 0xffffffff; // set base to MAX
+        }
         barrier(CLK_LOCAL_MEM_FENCE);
 
-        return current_active_count > 0;
+        if (current_active_count > 0) {
+            // set new base to minimum (i.e. slowest thread)
+            atomic_min(base_cache, pos);
+            barrier(CLK_LOCAL_MEM_FENCE);
+
+            for (uint i = 0; i < OVERSIZE_CACHE; ++i) {
+                uint idx = i * get_local_size(0) + get_local_id(0);
+                cache[idx] = text[*base_cache + idx];
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+
+            return true;
+        } else {
+            return false;
+        }
     } else {
+        // if no check happened, assume there is still work to do
         return true;
+    }
+}
+
+uint get_element(uint pos, __local uint* cache, __local uint* cache_base, __global const uint* text) {
+    if (pos >= *cache_base && pos < (*cache_base + get_local_size(0) * OVERSIZE_CACHE)) {
+        return cache[pos - *cache_base];
+    } else {
+        return text[pos];
     }
 }
 
@@ -130,9 +158,10 @@ __kernel void automaton(uint n,
 
     // run until stack is empty
     bool work_left = true;
+    uint pos_for_cache = 0xffffffff;
     while (work_left && iter_count < MAX_ITER_COUNT) {
         // 1. sync
-        work_left = sync(&active_count, iter_count);
+        work_left = sync(&active_count, iter_count, pos_for_cache, cache, &base_cache, text);
 
         // 2. do thread-local work
         if (stack_size > 0) {
@@ -148,7 +177,7 @@ __kernel void automaton(uint n,
                 prune = startpos;
             } else if (startpos != prune && state != ID_FAIL && pos < size) { // variant b) get next states
                 // run automaton one step
-                uint element = text[pos];
+                uint element = get_element(pos, cache, &base_cache, text);
                 uint base_slot = find_next_slot(state, element, n, m, o, automatonData);
 
                 // decide what to do next
@@ -163,10 +192,12 @@ __kernel void automaton(uint n,
                         if (state_for_stack != ID_FAIL) {
                             if (stack_size < MAX_STACK_SIZE) {
                                 // push state to stack
+                                uint new_pos = pos + 1;
                                 stack[stack_size].startpos = startpos;
-                                stack[stack_size].pos = pos + 1;
+                                stack[stack_size].pos = new_pos;
                                 stack[stack_size].state = state_for_stack;
                                 stack_size += 1;
+                                pos_for_cache = new_pos; // request pos from stack.top to be cached
                             } else {
                                 flags[FLAG_STACK_FULL] = 1;
                             }
@@ -179,6 +210,7 @@ __kernel void automaton(uint n,
             // check if stack is empty => goodbye
             if (stack_size == 0) {
                 atomic_dec(&active_count);
+                pos_for_cache = 0xffffffff; // do not request any cache data anymore
             }
         }
 
