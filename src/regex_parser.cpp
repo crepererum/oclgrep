@@ -330,15 +330,6 @@ graph::graph_t ast_to_graph(const ast::regex& r) {
 }
 
 
-std::size_t power_of_2(std::size_t x) {
-    std::size_t y = 1;
-    while (y < x) {
-        y = y << 1;
-    }
-    return y;
-}
-
-
 template <typename T>
 void write_to_buffer(serial::buffer& b, std::size_t base, T element) {
     // XXX: check big vs little endian!
@@ -350,26 +341,21 @@ void write_to_buffer(serial::buffer& b, std::size_t base, T element) {
 
 serial::graph serialize(const graph::graph_t& g) {
     // 1. calculate maximum numbers for allocations
-    std::size_t max_n = g.size();
-    std::size_t max_m = 0;
-    std::size_t max_o = 0;
+    std::size_t n = g.size();
+    std::size_t m = 0;
+    std::size_t o = 0;
     for (const auto& node : g) {
-        max_m = std::max(max_m, node->next.size());
+        m = std::max(m, node->next.size());
         for (const auto& value_slot : node->next) {
-            max_o = std::max(max_o, std::get<1>(value_slot)->size());
+            o = std::max(o, std::get<1>(value_slot)->size());
         }
     }
 
-    // 2. make it a power of 2
-    std::size_t n = max_n; // doesn't make sense
-    std::size_t m = power_of_2(max_m);
-    std::size_t o = power_of_2(max_o);
-
-    // 3. create buffer
+    // 2. create buffer
     serial::graph result(n, m, o);
     // at this point, the buffer if filled with zero which means: whatever you do, fail! (aka do nothing)
 
-    // 4. write data
+    // 3. write data
     for (std::size_t i_node = 0; i_node < n; ++i_node) {
         const auto& node = g[i_node];
         std::size_t base_node = i_node * m * (sizeof(serial::character) + o * sizeof(serial::id));
@@ -389,7 +375,7 @@ serial::graph serialize(const graph::graph_t& g) {
         }
     }
 
-    // 5. done
+    // 4. done
     return result;
 }
 
