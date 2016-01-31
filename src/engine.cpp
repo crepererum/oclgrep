@@ -35,6 +35,7 @@ cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& co
 
     // create build options string
     std::stringstream buildOptionsSS;
+    buildOptionsSS << "-Werror ";
     for (const auto& kv : defines) {
         buildOptionsSS << "-D" << std::get<0>(kv) << "=" << std::get<1>(kv) << " ";
     }
