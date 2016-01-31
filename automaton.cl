@@ -7,14 +7,14 @@
 #define FLAG_STACK_FULL 0
 #define FLAG_ITER_MAX 1
 
-uint find_next_slot(uint state, uint element, uint n, uint m, uint o, __constant char* automatonData) {
-    uint base_node = state * m * (sizeof(uint) + o * sizeof(uint));
+uint find_next_slot(uint state, uint element, uint n, uint m, uint o, __constant uint* automatonData) {
+    uint base_node = state * m * (1 + o);
 
     bool found = false;
 
     uint idx_next = 0;
-    uint base_next = base_node + idx_next * (sizeof(uint) + o * sizeof(uint));
-    uint x_next = *((__constant uint*)(automatonData + base_next));
+    uint base_next = base_node + idx_next * (1 + o);
+    uint x_next = automatonData[base_next];
 
     uint idx_current = idx_next; // exception for first round
     uint base_current = base_next;
@@ -26,8 +26,8 @@ uint find_next_slot(uint state, uint element, uint n, uint m, uint o, __constant
         x_current = x_next;
 
         idx_next = idx_current + 1;
-        base_next = base_node + idx_next * (sizeof(uint) + o * sizeof(uint));
-        x_next = *((__constant uint*)(automatonData + base_next));
+        base_next = base_node + idx_next * (1 + o);
+        x_next = automatonData[base_next];
 
         if (element >= x_current && element < x_next) {
             found = true;
@@ -35,16 +35,16 @@ uint find_next_slot(uint state, uint element, uint n, uint m, uint o, __constant
     }
 
     if (found) {
-        uint base_slot = base_current + sizeof(uint);
+        uint base_slot = base_current + 1;
         return base_slot;
     } else {
         return 0;
     }
 }
 
-uint state_from_slot(uint idx, uint base_slot, uint n, __constant char* automatonData) {
-    uint base_entry = base_slot + idx * sizeof(uint);
-    uint next_state = *((__constant uint*)(automatonData + base_entry));
+uint state_from_slot(uint idx, uint base_slot, uint n, __constant uint* automatonData) {
+    uint base_entry = base_slot + idx;
+    uint next_state = automatonData[base_entry];
     if (next_state < n) {
         return next_state;
     } else {
@@ -63,15 +63,15 @@ uint run_until_end(uint pos,
                    uint m,
                    uint o,
                    uint size,
-                   __constant char* automatonData,
-                   __global const char* text,
+                   __constant uint* automatonData,
+                   __global const uint* text,
                    __private struct stack_entry* stack,
                    uint* stack_size,
                    uint* iter_count,
                    __global char* flags) {
     while (state != ID_FAIL && state != ID_OK && pos < size && *iter_count < MAX_ITER_COUNT) {
         // evaluate current node
-        uint element = *((__global const uint*)(text + sizeof(uint) * pos));
+        uint element = text[pos];
         uint base_slot = find_next_slot(state, element, n, m, o, automatonData);
         pos += 1;
 
@@ -113,8 +113,8 @@ __kernel void automaton(uint n,
                         uint m,
                         uint o,
                         uint size,
-                        __constant char* automatonData,
-                        __global const char* text,
+                        __constant uint* automatonData,
+                        __global const uint* text,
                         __global uint* output,
                         __global char* flags) {
     uint startpos = get_global_id(0);

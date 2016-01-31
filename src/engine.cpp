@@ -13,7 +13,7 @@
 
 
 static_assert(sizeof(std::uint32_t) == sizeof(cl_uint), "OpenCL uint has to be 32bit");
-static_assert(sizeof(char32_t) == sizeof(cl_char4), "OpenCL char4 has not the same width as our Unicode characters");
+static_assert(sizeof(char32_t) == sizeof(std::uint32_t), "uint32 and char32_t have to have the same size");
 static_assert(sizeof(char) == sizeof(cl_char), "OpenCL char has not the same size as host char");
 
 
