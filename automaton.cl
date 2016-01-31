@@ -58,58 +58,6 @@ struct stack_entry {
     uint state;
 };
 
-uint run_until_end(uint pos,
-                   uint state,
-                   uint n,
-                   uint m,
-                   uint o,
-                   uint size,
-                   __constant uint* automatonData,
-                   __global const uint* text,
-                   __private struct stack_entry* stack,
-                   uint* stack_size,
-                   uint* iter_count,
-                   __global char* flags) {
-    while (state != ID_FAIL && state != ID_OK && pos < size && *iter_count < MAX_ITER_COUNT) {
-        // evaluate current node
-        uint element = text[pos];
-        uint base_slot = find_next_slot(state, element, n, m, o, automatonData);
-        pos += 1;
-
-        // decide what to do next
-        if (base_slot != 0) {
-            // first decision gues to this "thread"
-            state = state_from_slot(0, base_slot, n, automatonData);
-
-            // all other possibilites go to the stack
-            for (uint i = 1; i < o; ++i) {
-                uint state_for_stack = state_from_slot(i, base_slot, n, automatonData);
-
-                if (state_for_stack != ID_FAIL) {
-                    if (*stack_size < MAX_STACK_SIZE) {
-                        // push state to stack
-                        stack[*stack_size].pos = pos;
-                        stack[*stack_size].state = state_for_stack;
-                        *stack_size += 1;
-                    } else {
-                        flags[FLAG_STACK_FULL] = 1;
-                    }
-                }
-            }
-        } else {
-            state = ID_FAIL;
-        }
-
-        *iter_count += 1;
-    }
-
-    if (*iter_count >= MAX_ITER_COUNT) {
-        flags[FLAG_ITER_MAX] = 1;
-    }
-
-    return state;
-}
-
 __kernel void automaton(uint n,
                         uint m,
                         uint o,
@@ -152,21 +100,53 @@ __kernel void automaton(uint n,
     uint prune = 0xffffffff;
 
     // run until stack is empty
-    while (stack_size > 0) {
+    while (stack_size > 0 && iter_count < MAX_ITER_COUNT) {
         // pop from stack
         stack_size -= 1;
         uint startpos = stack[stack_size].startpos;
         uint pos = stack[stack_size].pos;
         uint state = stack[stack_size].state;
 
-        // see explanation above about pruning
-        if (startpos != prune) {
-            // run automaton until end and check if that branch was successfull
-            uint candidate = run_until_end(pos, state, n, m, o, size, automatonData, text, stack, &stack_size, &iter_count, flags);
-            if (candidate == ID_OK) {
-                output[startpos] = startpos;
-                prune = startpos;
+        // variant a) we've finished
+        if (state == ID_OK) {
+            output[startpos] = startpos;
+            prune = startpos;
+        } else if (startpos != prune && state != ID_FAIL && pos < size) { // variant b) get next states
+            // run automaton one step
+            uint element = text[pos];
+            uint base_slot = find_next_slot(state, element, n, m, o, automatonData);
+
+            // decide what to do next
+            if (base_slot != 0) {
+                // first decision gues to this "thread"
+                state = state_from_slot(0, base_slot, n, automatonData);
+
+                // all other possibilites go to the stack
+                for (uint i = 0; i < o; ++i) {
+                    uint state_for_stack = state_from_slot(i, base_slot, n, automatonData);
+
+                    if (state_for_stack != ID_FAIL) {
+                        if (stack_size < MAX_STACK_SIZE) {
+                            // push state to stack
+                            stack[stack_size].startpos = startpos;
+                            stack[stack_size].pos = pos + 1;
+                            stack[stack_size].state = state_for_stack;
+                            stack_size += 1;
+                        } else {
+                            flags[FLAG_STACK_FULL] = 1;
+                        }
+                    }
+                }
             }
         }
+        // variant c) failed
+
+        // continue counting
+        iter_count += 1;
+    }
+
+    // write global error state
+    if (iter_count >= MAX_ITER_COUNT) {
+        flags[FLAG_ITER_MAX] = 1;
     }
 }
