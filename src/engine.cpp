@@ -109,7 +109,7 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
 
     constexpr std::size_t multi_input_n = 2;
     constexpr std::size_t oversize_cache = 2;
-    constexpr std::size_t group_size = 32;
+    constexpr std::size_t group_size = 16;
 
     kernelAutomaton.setArg(0, static_cast<cl_uint>(graph.n));
     kernelAutomaton.setArg(1, static_cast<cl_uint>(graph.m));
