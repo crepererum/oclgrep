@@ -31,6 +31,8 @@ static_assert(sizeof(char32_t) == sizeof(wchar_t), "wchar is not 32bit, but it's
 namespace ast {
     using optional_n = boost::optional<unsigned int>;
 
+    using multiplier_amount = unsigned int;
+
     struct multiplier_range {
         optional_n min;
         optional_n max;
@@ -43,7 +45,7 @@ namespace ast {
     struct multiplier_question {};
     struct multiplier_star {};
 
-    using multiplier = boost::variant<multiplier_range, multiplier_plus, multiplier_question, multiplier_star>;
+    using multiplier = boost::variant<multiplier_range, multiplier_amount, multiplier_plus, multiplier_question, multiplier_star>;
 
     using characterclass = std::vector<char32_t>;
 
@@ -72,11 +74,12 @@ namespace parser {
     template<typename T>
     static auto as = [](auto p) { return x3::rule<struct _, T>{} = x3::as_parser(p); };
 
+    auto const multiplier_amount = as<ast::multiplier_amount>('{' >> x3::uint_ >> '}');
     auto const multiplier_range = as<ast::multiplier_range>('{' >> -x3::uint_ >> ',' >> -x3::uint_ >> '}');
     auto const multiplier_plus = as<ast::multiplier_plus>(x3::omit['+']);
     auto const multiplier_question = as<ast::multiplier_question>(x3::omit['?']);
     auto const multiplier_star = as<ast::multiplier_star>(x3::omit['*']);
-    auto const multiplier = as<ast::multiplier>(multiplier_range | multiplier_plus | multiplier_question | multiplier_star);
+    auto const multiplier = as<ast::multiplier>(multiplier_range | multiplier_amount | multiplier_plus | multiplier_question | multiplier_star);
     auto const characterclass = as<ast::characterclass>('[' >> +(x3::char_ - ']') >> ']');
     auto const character = as<ast::character>(x3::char_ - '[' - ']' - '{' - '}' - '+' - '*' - '?' - static_cast<wchar_t>(0x00000000) - static_cast<wchar_t>(0xffffffff));
     auto const wordelement = as<ast::wordelement>(characterclass | character);
@@ -94,7 +97,7 @@ ast::regex parse_ast(const std::u32string& input) {
     if (r && it == end) {
         return result;
     } else {
-        std::string msg("failed: ");
+        std::string msg("malformed regex: ");
         auto pos = static_cast<std::size_t>(it - input.begin());
         std::stringstream errmsg;
         errmsg << msg << boost::locale::conv::utf_to_utf<char>(input) << std::endl
@@ -210,6 +213,10 @@ namespace transformers {
         public:
             multiplier_transformator(std::uint32_t& id, collection_slots_t slots, const ast::word& content) : generic_visitor(id, slots), content(content) {}
 
+            transformer_result_t operator()(const ast::multiplier_amount& amount) const {
+                return doit(amount, ast::optional_n(amount));
+            }
+
             transformer_result_t operator()(const ast::multiplier_range& range) const {
                 std::size_t min = 0;
                 if (range.min) {
@@ -218,7 +225,7 @@ namespace transformers {
                 if (range.max && *(range.max) < min) {
                     throw user_error("Illegal regex multiplier!");
                 }
-                return doit(min, boost::none);
+                return doit(min, range.max);
             }
 
             transformer_result_t operator()(const ast::multiplier_plus& /*plus*/) const {
