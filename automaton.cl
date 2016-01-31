@@ -118,6 +118,8 @@ __kernel void automaton(uint n,
     const uint base_group = get_group_id(0) * multi_input_n * get_local_size(0);
 
     // private thread-local state
+    // WARNING: the stack is only supposed to hold valid tasks!
+    //          (no ID_OK or ID_FAIL, only valid pos and startpos)
     __private struct stack_entry stack[MAX_STACK_SIZE];
     uint stack_size = 0;
     uint iter_count = 0;
@@ -171,11 +173,8 @@ __kernel void automaton(uint n,
             uint pos = stack[stack_size].pos;
             uint state = stack[stack_size].state;
 
-            // variant a) we've finished
-            if (state == ID_OK) {
-                output[startpos] = startpos;
-                prune = startpos;
-            } else if (startpos != prune && state != ID_FAIL && pos < size) { // variant b) get next states
+            // pruning, see description above
+            if (startpos != prune) {
                 // run automaton one step
                 uint element = get_element(pos, cache, &base_cache, text);
                 uint base_slot = find_next_slot(state, element, n, m, o, automatonData);
@@ -189,10 +188,24 @@ __kernel void automaton(uint n,
                     for (uint i = 0; i < o; ++i) {
                         uint state_for_stack = state_from_slot(i, base_slot, n, automatonData);
 
-                        if (state_for_stack != ID_FAIL) {
+                        // finished?
+                        if (state_for_stack == ID_OK) {
+                            // write output
+                            output[startpos] = startpos;
+
+                            // enable pruning
+                            prune = startpos;
+
+                            // remaining slot entries are not required
+                            // HINT: regex compiler should sort slot entries so we do not push
+                            //       additional (useless) data to the stack
+                            break;
+                        }
+
+                        uint new_pos = pos + 1;
+                        if (state_for_stack != ID_FAIL && new_pos < size) {
                             if (stack_size < MAX_STACK_SIZE) {
                                 // push state to stack
-                                uint new_pos = pos + 1;
                                 stack[stack_size].startpos = startpos;
                                 stack[stack_size].pos = new_pos;
                                 stack[stack_size].state = state_for_stack;
@@ -205,7 +218,6 @@ __kernel void automaton(uint n,
                     }
                 }
             }
-            // variant c) failed
 
             // check if stack is empty => goodbye
             if (stack_size == 0) {

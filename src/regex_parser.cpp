@@ -374,9 +374,11 @@ serial::graph serialize(const graph::graph_t& g) {
             write_to_buffer(result.data, base_value_slot, c);
 
             std::size_t base_value_slot_payload = base_value_slot + sizeof(serial::character);
-            for (std::size_t i_slot_entry = 0; i_slot_entry < std::get<1>(value_slot)->size(); ++i_slot_entry) {
+            std::vector<std::uint32_t> entries_sorted(std::get<1>(value_slot)->begin(), std::get<1>(value_slot)->end());
+            std::sort(entries_sorted.begin(), entries_sorted.end());
+            for (std::size_t i_slot_entry = 0; i_slot_entry < entries_sorted.size(); ++i_slot_entry) {
                 std::size_t base_slot_entry = base_value_slot_payload + i_slot_entry * sizeof(serial::id);
-                serial::id id = (*std::get<1>(value_slot))[i_slot_entry];
+                serial::id id = entries_sorted[i_slot_entry];
                 write_to_buffer(result.data, base_slot_entry, id);
             }
         }
