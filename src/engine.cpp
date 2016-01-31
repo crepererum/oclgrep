@@ -60,17 +60,24 @@ cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& co
     return program;
 }
 
+constexpr std::uint32_t calc_alignement_mask(std::size_t n_bytes) {
+    constexpr std::uint32_t full = ~static_cast<std::uint32_t>(0);
+    std::uint32_t base = static_cast<std::uint32_t>(1) << n_bytes;
+    return full - base + static_cast<std::uint32_t>(1);
+}
+
 std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& fcontent) {
-    constexpr std::uint32_t flag_iter_max   = 1;
-    constexpr std::uint32_t flag_stack_full = 0;
-    constexpr std::uint32_t flags_n         = 2;
-    constexpr std::uint32_t group_size      = 16;
-    constexpr std::uint32_t max_iter_count  = 512;
-    constexpr std::uint32_t max_stack_size  = 16;
-    constexpr std::uint32_t multi_input_n   = 2;
-    constexpr std::uint32_t oversize_cache  = 2;
-    constexpr std::uint32_t result_fail     = 0xffffffff;
-    constexpr std::uint32_t sync_count      = 32;
+    constexpr std::uint32_t cache_mask      = calc_alignement_mask(5); // sets cache alignement of local text cache base 32
+    constexpr std::uint32_t flag_iter_max   = 1;                       // index of "we've reached too many iteratios"-flag
+    constexpr std::uint32_t flag_stack_full = 0;                       // index of "thread-local stack was too small"-flag
+    constexpr std::uint32_t flags_n         = 2;                       // number of flags
+    constexpr std::uint32_t group_size      = 128;                     // OpenCL group size
+    constexpr std::uint32_t max_iter_count  = 512;                     // limits number of iterations to prevent timeouts
+    constexpr std::uint32_t max_stack_size  = 16;                      // limits thread-local stack
+    constexpr std::uint32_t multi_input_n   = 2;                       // load-balancing by using multiple start postions per thread
+    constexpr std::uint32_t oversize_cache  = 4;                       // cache_size=group_size*oversize_cache
+    constexpr std::uint32_t result_fail     = 0xffffffff;              // placeholder for "FAIL" results of automaton
+    constexpr std::uint32_t sync_count      = 32;                      // controls after how many iterations group threads sync
 
     std::vector<cl::Platform> pool_platforms;
     cl::Platform::get(&pool_platforms);
@@ -97,6 +104,7 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     cl::Context context(devices);
 
     std::map<std::string, std::string> buildDefines{
+        {"CACHE_MASK",      std::to_string(cache_mask)},
         {"FLAG_ITER_MAX",   std::to_string(flag_iter_max)},
         {"FLAG_STACK_FULL", std::to_string(flag_stack_full)},
         {"ID_BEGIN",        std::to_string(serial::id_begin)},

@@ -1,4 +1,5 @@
-/* defines:
+/* defines (see host code for documentation):
+    - CACHE_MASK
     - FLAG_ITER_MAX
     - FLAG_STACK_FULL
     - ID_BEGIN
@@ -66,7 +67,7 @@ struct stack_entry {
     uint state;
 };
 
-bool sync(__local uint* active_count, uint iter_count, uint pos, __local uint* cache, __local uint* base_cache, __global const uint* text) {
+bool sync(__local uint* active_count, uint iter_count, uint pos, __local uint* cache, __local uint* base_cache, __global const uint* text, uint size) {
     // do not sync every cycle
     if (iter_count % SYNC_COUNT == 0) {
         // use super safe double barrier
@@ -82,10 +83,24 @@ bool sync(__local uint* active_count, uint iter_count, uint pos, __local uint* c
             atomic_min(base_cache, pos);
             barrier(CLK_LOCAL_MEM_FENCE);
 
+            // align cache base
+            uint base_cache_aligned = *base_cache && (uint)(CACHE_MASK);
+
+            // load cache
             for (uint i = 0; i < OVERSIZE_CACHE; ++i) {
-                uint idx = i * get_local_size(0) + get_local_id(0);
-                cache[idx] = text[*base_cache + idx];
+                uint idx_cache = i * get_local_size(0) + get_local_id(0);
+                uint idx_text = base_cache_aligned + idx_cache;
+                if (idx_text < size) {
+                    cache[idx_cache] = text[idx_text];
+                }
             }
+
+            // master writes back aligned cache base
+            if (is_master()) {
+                *base_cache = base_cache_aligned;
+            }
+
+            // final barrier
             barrier(CLK_LOCAL_MEM_FENCE);
 
             return true;
@@ -165,7 +180,7 @@ __kernel void automaton(uint n,
     uint pos_for_cache = 0xffffffff;
     while (work_left && iter_count < MAX_ITER_COUNT) {
         // 1. sync
-        work_left = sync(&active_count, iter_count, pos_for_cache, cache, &base_cache, text);
+        work_left = sync(&active_count, iter_count, pos_for_cache, cache, &base_cache, text, size);
 
         // 2. do thread-local work
         if (stack_size > 0) {
