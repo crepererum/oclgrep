@@ -64,6 +64,9 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
         if (!dev.getInfo<CL_DEVICE_ENDIAN_LITTLE>()) {
             throw user_error("not all selected devices are little endian!");
         }
+        if (dev.getInfo<CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE>() < graph.size()) {
+            throw user_error("compiled automaton is too large for the OpenCL device!");
+        }
     }
 
     cl::Context context(devices);
