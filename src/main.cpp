@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
             ("normalize-file", "apply NFKC normalization to data from input file")
             ("print-graph", "print graph data to stdout")
             ("print-profile", "print OpenCL profiling data to stdout")
+            ("no-output", "do not print actual output (for debug reasons)")
             ("help", "produce help message")
         ;
 
@@ -137,8 +138,10 @@ int main(int argc, char** argv) {
         // tada...
         auto result = runEngine(graph, fcontent_utf32, vm.count("print-profile"));
 
-        for (const auto& idx : result) {
-            std::cout << idx << std::endl;
+        if (!vm.count("no-output")) {
+            for (const auto& idx : result) {
+                std::cout << idx << std::endl;
+            }
         }
     } catch (user_error& e) {
         std::cerr << e.what() << std::endl;

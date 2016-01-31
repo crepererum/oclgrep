@@ -75,17 +75,18 @@ constexpr std::uint32_t calc_alignement_mask(std::size_t n_bytes) {
 }
 
 std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& fcontent, bool printProfile) {
-    constexpr std::uint32_t cache_mask      = calc_alignement_mask(5); // sets cache alignement of local text cache base 32
+    constexpr std::uint32_t cache_mask      = calc_alignement_mask(7); // sets cache alignement of local text cache base 32
     constexpr std::uint32_t flag_iter_max   = 1;                       // index of "we've reached too many iteratios"-flag
     constexpr std::uint32_t flag_stack_full = 0;                       // index of "thread-local stack was too small"-flag
     constexpr std::uint32_t flags_n         = 2;                       // number of flags
-    constexpr std::uint32_t group_size      = 128;                     // OpenCL group size
-    constexpr std::uint32_t max_iter_count  = 512;                     // limits number of iterations to prevent timeouts
-    constexpr std::uint32_t max_stack_size  = 16;                      // limits thread-local stack
-    constexpr std::uint32_t multi_input_n   = 2;                       // load-balancing by using multiple start postions per thread
+    constexpr std::uint32_t group_size      = 64;                      // OpenCL group size
+    constexpr std::uint32_t max_iter_count  = 2048;                    // limits number of iterations to prevent timeouts
+    constexpr std::uint32_t max_stack_size  = 128;                     // limits thread-local stack
+    constexpr std::uint32_t multi_input_n   = 64;                      // load-balancing by using multiple start postions per thread
     constexpr std::uint32_t oversize_cache  = 4;                       // cache_size=group_size*oversize_cache
     constexpr std::uint32_t result_fail     = 0xffffffff;              // placeholder for "FAIL" results of automaton
-    constexpr std::uint32_t sync_count      = 32;                      // controls after how many iterations group threads sync
+    constexpr std::uint32_t sync_count      = 128;                     // controls after how many iterations group threads sync
+    constexpr std::uint32_t use_cache       = 0;                       // controls if kernels use local memory cache
 
     std::vector<cl::Platform> pool_platforms;
     cl::Platform::get(&pool_platforms);
@@ -115,6 +116,7 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
         {"CACHE_MASK",      std::to_string(cache_mask)},
         {"FLAG_ITER_MAX",   std::to_string(flag_iter_max)},
         {"FLAG_STACK_FULL", std::to_string(flag_stack_full)},
+        {"GROUP_SIZE",      std::to_string(group_size)},
         {"ID_BEGIN",        std::to_string(serial::id_begin)},
         {"ID_FAIL",         std::to_string(serial::id_fail)},
         {"ID_OK",           std::to_string(serial::id_ok)},
@@ -123,6 +125,7 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
         {"OVERSIZE_CACHE",  std::to_string(oversize_cache)},
         {"RESULT_FAIL",     std::to_string(result_fail)},
         {"SYNC_COUNT",      std::to_string(sync_count)},
+        {"USE_CACHE",       std::to_string(use_cache)},
     };
 
     cl::Program programAutomaton = buildProgramFromFile("automaton.cl", context, devices, buildDefines);
@@ -166,7 +169,7 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     kernelAutomaton.setArg(5, dText);
     kernelAutomaton.setArg(6, dOutput);
     kernelAutomaton.setArg(7, dFlags);
-    kernelAutomaton.setArg(8, oversize_cache * group_size, nullptr);
+    kernelAutomaton.setArg(8, oversize_cache * group_size * sizeof(char32_t), nullptr);
 
     cl::CommandQueue queue(context, devices[0], cl::QueueProperties::Profiling);
     cl::Event evtKernelAutomaton;
@@ -199,5 +202,13 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
         throw user_error("Automaton engine error: reached maximum iteration count!");
     }
 
-    return output;
+    // TODO do this on the GPU
+    std::vector<std::uint32_t> outputClean;
+    for (const auto& pos : output) {
+        if (pos != result_fail) {
+            outputClean.push_back(pos);
+        }
+    }
+
+    return outputClean;
 }

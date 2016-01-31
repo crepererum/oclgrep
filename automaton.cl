@@ -2,6 +2,7 @@
     - CACHE_MASK
     - FLAG_ITER_MAX
     - FLAG_STACK_FULL
+    - GROUP_SIZE
     - ID_BEGIN
     - ID_FAIL
     - ID_OK
@@ -10,6 +11,7 @@
     - OVERSIZE_CACHE
     - RESULT_FAIL
     - SYNC_COUNT
+    - USE_CACHE
 */
 
 bool is_master() {
@@ -17,9 +19,9 @@ bool is_master() {
 }
 
 uint find_next_slot(uint state, uint element, uint n, uint o, __constant uint* automatonData) {
-    uint base_node = automatonData[state] >> 2; // be careful about bytes vs indices!
-    uint m = automatonData[base_node];
-    uint base_node_body = base_node + 1;
+    const uint base_node = automatonData[state] >> 2; // be careful about bytes vs indices!
+    const uint m = automatonData[base_node];
+    const uint base_node_body = base_node + 1;
 
     if (m == 0) {
         return 0;
@@ -90,11 +92,11 @@ bool sync(__local uint* active_count, uint iter_count, uint pos, __local uint* c
             barrier(CLK_LOCAL_MEM_FENCE);
 
             // align cache base
-            uint base_cache_aligned = *base_cache && (uint)(CACHE_MASK);
+            uint base_cache_aligned = *base_cache & (uint)(CACHE_MASK);
 
             // load cache
             for (uint i = 0; i < OVERSIZE_CACHE; ++i) {
-                uint idx_cache = i * get_local_size(0) + get_local_id(0);
+                uint idx_cache = i * GROUP_SIZE + get_local_id(0);
                 uint idx_text = base_cache_aligned + idx_cache;
                 if (idx_text < size) {
                     cache[idx_cache] = text[idx_text];
@@ -120,11 +122,15 @@ bool sync(__local uint* active_count, uint iter_count, uint pos, __local uint* c
 }
 
 uint get_element(uint pos, __local uint* cache, __local uint* cache_base, __global const uint* text) {
-    if (pos >= *cache_base && pos < (*cache_base + get_local_size(0) * OVERSIZE_CACHE)) {
+#if USE_CACHE == 0
+    return text[pos];
+#else
+    if (pos >= *cache_base && pos < (*cache_base + GROUP_SIZE * OVERSIZE_CACHE)) {
         return cache[pos - *cache_base];
     } else {
         return text[pos];
     }
+#endif
 }
 
 __kernel void automaton(uint n,
@@ -137,7 +143,7 @@ __kernel void automaton(uint n,
                         __global char* flags,
                         __local uint* cache) {
     // constants
-    const uint base_group = get_group_id(0) * multi_input_n * get_local_size(0);
+    const uint base_group = get_group_id(0) * multi_input_n * GROUP_SIZE;
 
     // private thread-local state
     // WARNING: the stack is only supposed to hold valid tasks!
@@ -150,7 +156,7 @@ __kernel void automaton(uint n,
     __local uint active_count;
     __local uint base_cache;
     if (is_master()) {
-        active_count = get_local_size(0);
+        active_count = GROUP_SIZE;
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 
@@ -159,7 +165,7 @@ __kernel void automaton(uint n,
         // [group_0: [i_0: [thread_0|...|thread_z] | ... | [i_y: thread_0|...|thread_z]]]
         // | ... |
         // [group_x: [i_0: [thread_0|...|thread_z] | ... | [i_y: thread_0|...|thread_z]]]
-        uint startpos = base_group + (i - 1) * get_local_size(0) + get_local_id(0);
+        uint startpos = base_group + (i - 1) * GROUP_SIZE + get_local_id(0);
 
         if (startpos < size) {
             // push to stack
@@ -185,7 +191,11 @@ __kernel void automaton(uint n,
     uint pos_for_cache = 0xffffffff;
     while (work_left && iter_count < MAX_ITER_COUNT) {
         // 1. sync
+#if USE_CACHE == 0
+        work_left = stack_size > 0;
+#else
         work_left = sync(&active_count, iter_count, pos_for_cache, cache, &base_cache, text, size);
+#endif
 
         // 2. do thread-local work
         if (stack_size > 0) {
