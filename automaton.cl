@@ -18,18 +18,17 @@ bool is_master() {
     return get_local_id(0) == 0;
 }
 
-uint find_next_slot(uint state, uint element, uint n, uint o, __constant uint* automatonData) {
+__constant uint* find_next_slot(uint state, uint element, uint n, uint o, __constant uint* automatonData) {
     const uint base_node = automatonData[state] >> 2; // be careful about bytes vs indices!
     __constant uint* pNode = automatonData + base_node;
     const uint m = pNode[0];
-    const uint base_node_body = base_node + 1;
     __constant uint* pNodeBody = pNode + 1;
 
     if (m == 0) {
         return 0;
     }
 
-    bool found = false;
+    bool searching = true;
 
     uint idx_next = 0;
     uint base_next = idx_next * (1 + o);
@@ -39,7 +38,7 @@ uint find_next_slot(uint state, uint element, uint n, uint o, __constant uint* a
     uint base_current = base_next;
     uint x_current = x_next;
 
-    while (idx_current + 1 < m && !found) {
+    while (idx_current + 1 < m && searching) {
         idx_current = idx_next;
         base_current = base_next;
         x_current = x_next;
@@ -49,21 +48,19 @@ uint find_next_slot(uint state, uint element, uint n, uint o, __constant uint* a
         x_next = pNodeBody[base_next];
 
         if (element >= x_current && element < x_next) {
-            found = true;
+            searching = false;
         }
     }
 
-    if (found) {
-        uint base_slot = base_node_body + base_current + 1;
-        return base_slot;
-    } else {
+    if (searching) {
         return 0;
+    } else {
+        return pNodeBody + base_current + 1;
     }
 }
 
-uint state_from_slot(uint idx, uint base_slot, uint n, __constant uint* automatonData) {
-    uint base_entry = base_slot + idx;
-    uint next_state = automatonData[base_entry];
+uint state_from_slot(uint idx, __constant uint* pSlot, uint n) {
+    uint next_state = pSlot[idx];
     if (next_state < n) {
         return next_state;
     } else {
@@ -205,14 +202,14 @@ __kernel void automaton(uint n,
 
             // run automaton one step
             uint element = get_element(pos, cache, &base_cache, text);
-            uint base_slot = find_next_slot(state, element, n, o, automatonData);
+            __constant uint* pSlot = find_next_slot(state, element, n, o, automatonData);
 
             // decide what to do next
-            if (base_slot != 0) {
+            if (pSlot) {
                 // new data for stack
                 bool not_finished = true;
                 for (uint i = 0; i < o && not_finished; ++i) {
-                    uint state_for_stack = state_from_slot(i, base_slot, n, automatonData);
+                    uint state_for_stack = state_from_slot(i, pSlot, n);
                     uint new_pos = pos + 1;
 
                     // finished?
