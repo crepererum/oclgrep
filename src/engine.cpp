@@ -108,7 +108,8 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     );
 
     constexpr std::size_t multi_input_n = 2;
-    constexpr std::size_t group_size = 2;
+    constexpr std::size_t oversize_cache = 2;
+    constexpr std::size_t group_size = 32;
 
     kernelAutomaton.setArg(0, static_cast<cl_uint>(graph.n));
     kernelAutomaton.setArg(1, static_cast<cl_uint>(graph.m));
@@ -119,6 +120,7 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     kernelAutomaton.setArg(6, dText);
     kernelAutomaton.setArg(7, dOutput);
     kernelAutomaton.setArg(8, dFlags);
+    kernelAutomaton.setArg(9, oversize_cache * group_size, nullptr);
 
     cl::CommandQueue queue(context, devices[0]);
 

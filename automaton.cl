@@ -53,6 +53,7 @@ uint state_from_slot(uint idx, uint base_slot, uint n, __constant uint* automato
 }
 
 struct stack_entry {
+    uint startpos;
     uint pos;
     uint state;
 };
@@ -117,41 +118,54 @@ __kernel void automaton(uint n,
                         __constant uint* automatonData,
                         __global const uint* text,
                         __global uint* output,
-                        __global char* flags) {
-    __private struct stack_entry stack[MAX_STACK_SIZE];
-    uint base_group = get_group_id(0) * multi_input_n * get_local_size(0);
+                        __global char* flags,
+                        __local uint* cache) {
+    // constants
+    const uint base_group = get_group_id(0) * multi_input_n * get_local_size(0);
 
-    for (uint i = 0; i < multi_input_n; ++i) {
-        // [group0: [i0: [thread0|..|threadn]|...[thread0|...|threadn]]] | ... | [groupn: [i0: [thread0|..|threadn]|...[thread0|...|threadn]]]
-        uint startpos = base_group + i * get_local_size(0) + get_local_id(0);
+    // private thread-local state
+    __private struct stack_entry stack[MAX_STACK_SIZE];
+    uint stack_size = 0;
+    uint iter_count = 0;
+
+    // push initial work to stack
+    for (uint i = multi_input_n; i > 0; --i) {
+        // [group_0: [i_0: [thread_0|...|thread_z] | ... | [i_y: thread_0|...|thread_z]]]
+        // | ... |
+        // [group_x: [i_0: [thread_0|...|thread_z] | ... | [i_y: thread_0|...|thread_z]]]
+        uint startpos = base_group + (i - 1) * get_local_size(0) + get_local_id(0);
 
         if (startpos < size) {
-            // set up stack with inital task
-            uint stack_size = 1;
-            stack[0].pos = startpos;
-            stack[0].state = ID_BEGIN;
+            // push to stack
+            stack[stack_size].startpos = startpos;
+            stack[stack_size].pos = startpos;
+            stack[stack_size].state = ID_BEGIN;
+            stack_size += 1;
 
-            // run until stack is empty
-            uint iter_count = 0;
-            uint result_state = ID_FAIL;
-            while (stack_size > 0 && result_state != ID_OK) {
-                // pop from stack
-                stack_size -= 1;
-                uint pos = stack[stack_size].pos;
-                uint state = stack[stack_size].state;
+            // write failed state, in case no task will finish
+            output[startpos] = RESULT_FAIL;
+        }
+    }
 
-                // run automaton until end and check if that branch was successfull
-                uint candidate = run_until_end(pos, state, n, m, o, size, automatonData, text, stack, &stack_size, &iter_count, flags);
-                if (candidate == ID_OK) {
-                    result_state = ID_OK;
-                }
-            }
+    // stack is ordered, so same startpos values will be grouped together
+    // use this knowledge for branch pruning in case we ware successful
+    uint prune = 0xffffffff;
 
-            // check for final result
-            if (result_state == ID_OK) {
+    // run until stack is empty
+    while (stack_size > 0) {
+        // pop from stack
+        stack_size -= 1;
+        uint startpos = stack[stack_size].startpos;
+        uint pos = stack[stack_size].pos;
+        uint state = stack[stack_size].state;
+
+        // see explanation above about pruning
+        if (startpos != prune) {
+            // run automaton until end and check if that branch was successfull
+            uint candidate = run_until_end(pos, state, n, m, o, size, automatonData, text, stack, &stack_size, &iter_count, flags);
+            if (candidate == ID_OK) {
                 output[startpos] = startpos;
-            } else {
-                output[startpos] = RESULT_FAIL;
+                prune = startpos;
             }
         }
     }
