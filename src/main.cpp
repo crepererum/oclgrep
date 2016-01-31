@@ -24,7 +24,7 @@ std::string readfile(const std::string& fname) {
 }
 
 void print_graph(const serial::graph& g) {
-    std::cout << "graph (n=" << g.n << ", m=" << g.m << ", o=" << g.o << ", size=" << g.size() << "byte)" << std::endl;
+    std::cout << "Graph (n=" << g.n << ", m=" << g.m << ", o=" << g.o << ", size=" << g.size() << "byte):" << std::endl;
 
     for (std::size_t i_node = 0; i_node < g.n; ++i_node) {
         std::cout << "  node " << i_node << ":" << std::endl;
@@ -71,6 +71,7 @@ int main(int argc, char** argv) {
             ("normalize-regex", "apply NFKC normalization to regex")
             ("normalize-file", "apply NFKC normalization to data from input file")
             ("print-graph", "print graph data to stdout")
+            ("print-profile", "print OpenCL profiling data to stdout")
             ("help", "produce help message")
         ;
 
@@ -132,7 +133,7 @@ int main(int argc, char** argv) {
         }
 
         // tada...
-        auto result = runEngine(graph, fcontent_utf32);
+        auto result = runEngine(graph, fcontent_utf32, vm.count("print-profile"));
 
         for (const auto& idx : result) {
             std::cout << idx << std::endl;

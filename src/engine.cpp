@@ -1,6 +1,7 @@
 #include <cstdint>
 
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <vector>
@@ -60,13 +61,20 @@ cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& co
     return program;
 }
 
+float getEventTimeMS(const cl::Event& evt) {
+    evt.wait();
+    cl_ulong t_start = evt.getProfilingInfo<CL_PROFILING_COMMAND_START>();
+    cl_ulong t_end = evt.getProfilingInfo<CL_PROFILING_COMMAND_END>();
+    return static_cast<float>(t_end - t_start) / (1000.f * 1000.f);
+}
+
 constexpr std::uint32_t calc_alignement_mask(std::size_t n_bytes) {
     constexpr std::uint32_t full = ~static_cast<std::uint32_t>(0);
     std::uint32_t base = static_cast<std::uint32_t>(1) << n_bytes;
     return full - base + static_cast<std::uint32_t>(1);
 }
 
-std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& fcontent) {
+std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& fcontent, bool printProfile) {
     constexpr std::uint32_t cache_mask      = calc_alignement_mask(5); // sets cache alignement of local text cache base 32
     constexpr std::uint32_t flag_iter_max   = 1;                       // index of "we've reached too many iteratios"-flag
     constexpr std::uint32_t flag_stack_full = 0;                       // index of "thread-local stack was too small"-flag
@@ -161,7 +169,8 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     kernelAutomaton.setArg(8, dFlags);
     kernelAutomaton.setArg(9, oversize_cache * group_size, nullptr);
 
-    cl::CommandQueue queue(context, devices[0]);
+    cl::CommandQueue queue(context, devices[0], cl::QueueProperties::Profiling);
+    cl::Event evtKernelAutomaton;
 
     std::size_t totalSize = fcontent.size() / multi_input_n;
     if (fcontent.size() % multi_input_n != 0) {
@@ -170,7 +179,7 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     if (totalSize % group_size != 0) {
         totalSize += group_size - totalSize % group_size;
     }
-    queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(totalSize), cl::NDRange(group_size));
+    queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(totalSize), cl::NDRange(group_size), nullptr, &evtKernelAutomaton);
 
     std::vector<uint32_t> output(fcontent.size(), 0);
     queue.enqueueReadBuffer(dOutput, false, 0, fcontent.size() * sizeof(cl_uint), output.data());
@@ -178,6 +187,11 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     queue.enqueueReadBuffer(dFlags, false, 0, flags.size() * sizeof(char), flags.data());
 
     queue.finish();
+
+    if (printProfile) {
+        std::cout << "Profiling data:" << std::endl
+            << "  kernelAutomaton = " << getEventTimeMS(evtKernelAutomaton) << "ms" << std::endl;
+    }
 
     if (flags[flag_stack_full]) {
         throw user_error("Automaton engine error: task stack was full!");
