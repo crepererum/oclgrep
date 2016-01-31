@@ -159,15 +159,14 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     );
 
     kernelAutomaton.setArg(0, static_cast<cl_uint>(graph.n));
-    kernelAutomaton.setArg(1, static_cast<cl_uint>(graph.m));
-    kernelAutomaton.setArg(2, static_cast<cl_uint>(graph.o));
-    kernelAutomaton.setArg(3, static_cast<cl_uint>(fcontent.size()));
-    kernelAutomaton.setArg(4, static_cast<cl_uint>(multi_input_n));
-    kernelAutomaton.setArg(5, dAutomatonData);
-    kernelAutomaton.setArg(6, dText);
-    kernelAutomaton.setArg(7, dOutput);
-    kernelAutomaton.setArg(8, dFlags);
-    kernelAutomaton.setArg(9, oversize_cache * group_size, nullptr);
+    kernelAutomaton.setArg(1, static_cast<cl_uint>(graph.o));
+    kernelAutomaton.setArg(2, static_cast<cl_uint>(fcontent.size()));
+    kernelAutomaton.setArg(3, static_cast<cl_uint>(multi_input_n));
+    kernelAutomaton.setArg(4, dAutomatonData);
+    kernelAutomaton.setArg(5, dText);
+    kernelAutomaton.setArg(6, dOutput);
+    kernelAutomaton.setArg(7, dFlags);
+    kernelAutomaton.setArg(8, oversize_cache * group_size, nullptr);
 
     cl::CommandQueue queue(context, devices[0], cl::QueueProperties::Profiling);
     cl::Event evtKernelAutomaton;

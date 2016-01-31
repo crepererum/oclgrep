@@ -24,14 +24,16 @@ std::string readfile(const std::string& fname) {
 }
 
 void print_graph(const serial::graph& g) {
-    std::cout << "Graph (n=" << g.n << ", m=" << g.m << ", o=" << g.o << ", size=" << g.size() << "byte):" << std::endl;
+    std::cout << "Graph (n=" << g.n << ", o=" << g.o << ", size=" << g.size() << "byte):" << std::endl;
 
     for (std::size_t i_node = 0; i_node < g.n; ++i_node) {
-        std::cout << "  node " << i_node << ":" << std::endl;
-        std::size_t base_node = i_node * g.m * (sizeof(serial::character) + g.o * sizeof(serial::id));
+        std::size_t base_node = *reinterpret_cast<const serial::id*>(&g.data[i_node * sizeof(serial::id)]);
+        std::size_t m = *reinterpret_cast<const serial::id*>(&g.data[base_node]);
+        std::cout << "  node" << i_node << " (m=" << m << "):" << std::endl;
 
-        for (std::size_t i_value_slot = 0; i_value_slot < g.m; ++i_value_slot) {
-            std::size_t base_value_slot = base_node + i_value_slot * (sizeof(serial::character) + g.o * sizeof(serial::id));
+        std::size_t base_node_body = base_node + sizeof(serial::id);
+        for (std::size_t i_value_slot = 0; i_value_slot < m; ++i_value_slot) {
+            std::size_t base_value_slot = base_node_body + i_value_slot * (sizeof(serial::character) + g.o * sizeof(serial::id));
             serial::character c = *reinterpret_cast<const serial::character*>(&g.data[base_value_slot]);
             std::cout << "    " << c << " => [";
 

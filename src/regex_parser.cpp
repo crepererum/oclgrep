@@ -359,27 +359,45 @@ serial::graph serialize(const graph::graph_t& g) {
     }
 
     // 2. create buffer
-    serial::graph result(n, m, o);
-    // at this point, the buffer if filled with zero which means: whatever you do, fail! (aka do nothing)
+    serial::graph result(n, o);
+    // at this point, the dispatch table exists
 
     // 3. write data
     for (std::size_t i_node = 0; i_node < n; ++i_node) {
         const auto& node = g[i_node];
-        std::size_t base_node = i_node * m * (sizeof(serial::character) + o * sizeof(serial::id));
+        std::size_t base_node = result.size();
+
+        // write current size to dispatch table
+        write_to_buffer(result.data, i_node * sizeof(serial::id), static_cast<serial::id>(base_node));
+
+        // start node by writing its size
+        result.grow(sizeof(serial::id));
+        write_to_buffer(result.data, base_node, static_cast<serial::id>(node->next.size()));
+
+        // write node body
+        std::size_t base_node_body = base_node + sizeof(serial::id);
         for (std::size_t i_value_slot = 0; i_value_slot < node->next.size(); ++i_value_slot) {
             const auto& value_slot = node->next[i_value_slot];
 
-            std::size_t base_value_slot = base_node + i_value_slot * (sizeof(serial::character) + o * sizeof(serial::id));
+            std::size_t base_value_slot = base_node_body + i_value_slot * (sizeof(serial::character) + o * sizeof(serial::id));
             serial::character c = std::get<0>(value_slot);
+
+            // write character that belongs to slot
+            result.grow(sizeof(serial::character));
             write_to_buffer(result.data, base_value_slot, c);
 
+            // write fixed size, sorted, dedup data to slot
             std::size_t base_value_slot_payload = base_value_slot + sizeof(serial::character);
             std::vector<std::uint32_t> entries_sorted(std::get<1>(value_slot)->begin(), std::get<1>(value_slot)->end());
             std::sort(entries_sorted.begin(), entries_sorted.end());
-            for (std::size_t i_slot_entry = 0; i_slot_entry < entries_sorted.size(); ++i_slot_entry) {
-                std::size_t base_slot_entry = base_value_slot_payload + i_slot_entry * sizeof(serial::id);
-                serial::id id = entries_sorted[i_slot_entry];
-                write_to_buffer(result.data, base_slot_entry, id);
+            entries_sorted.erase(std::unique(entries_sorted.begin(), entries_sorted.end()), entries_sorted.end());
+            for (std::size_t i_slot_entry = 0; i_slot_entry < o; ++i_slot_entry) {
+                result.grow(sizeof(serial::id));
+                if (i_slot_entry < entries_sorted.size()) {
+                    std::size_t base_slot_entry = base_value_slot_payload + i_slot_entry * sizeof(serial::id);
+                    serial::id id = entries_sorted[i_slot_entry];
+                    write_to_buffer(result.data, base_slot_entry, id);
+                } // else => data is 0
             }
         }
     }

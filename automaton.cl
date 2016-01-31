@@ -16,13 +16,19 @@ bool is_master() {
     return get_local_id(0) == 0;
 }
 
-uint find_next_slot(uint state, uint element, uint n, uint m, uint o, __constant uint* automatonData) {
-    uint base_node = state * m * (1 + o);
+uint find_next_slot(uint state, uint element, uint n, uint o, __constant uint* automatonData) {
+    uint base_node = automatonData[state] >> 2; // be careful about bytes vs indices!
+    uint m = automatonData[base_node];
+    uint base_node_body = base_node + 1;
+
+    if (m == 0) {
+        return 0;
+    }
 
     bool found = false;
 
     uint idx_next = 0;
-    uint base_next = base_node + idx_next * (1 + o);
+    uint base_next = base_node_body + idx_next * (1 + o);
     uint x_next = automatonData[base_next];
 
     uint idx_current = idx_next; // exception for first round
@@ -35,7 +41,7 @@ uint find_next_slot(uint state, uint element, uint n, uint m, uint o, __constant
         x_current = x_next;
 
         idx_next = idx_current + 1;
-        base_next = base_node + idx_next * (1 + o);
+        base_next = base_node_body + idx_next * (1 + o);
         x_next = automatonData[base_next];
 
         if (element >= x_current && element < x_next) {
@@ -122,7 +128,6 @@ uint get_element(uint pos, __local uint* cache, __local uint* cache_base, __glob
 }
 
 __kernel void automaton(uint n,
-                        uint m,
                         uint o,
                         uint size,
                         uint multi_input_n,
@@ -194,7 +199,7 @@ __kernel void automaton(uint n,
             if (startpos != prune) {
                 // run automaton one step
                 uint element = get_element(pos, cache, &base_cache, text);
-                uint base_slot = find_next_slot(state, element, n, m, o, automatonData);
+                uint base_slot = find_next_slot(state, element, n, o, automatonData);
 
                 // decide what to do next
                 if (base_slot != 0) {

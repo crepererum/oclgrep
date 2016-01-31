@@ -53,18 +53,17 @@ namespace serial {
 
     struct graph {
         std::size_t n;                  // number of nodes
-        std::size_t m;                  // maximum number of outgoing multi-edges
         std::size_t o;                  // maximum cardinality of multi-edges
         buffer data; // size = n * m * (sizeof(character) + o * sizeof(id))
 
-        graph(std::size_t n, std::size_t m, std::size_t o) : n(n), m(m), o(o), data(n * m * (sizeof(character) + o * sizeof(id)), 0) {} // 0 is also the id of fail, so good for unused space
-
-        void sanity_check() const {
-            sanity_assert(data.size() == n * m * (sizeof(character) + o * sizeof(id)), "Serialized graph has wrong size!");
-        }
+        graph(std::size_t n, std::size_t o) : n(n), o(o), data(n * sizeof(id), 0) {} // 0 is also the id of fail, so good for unused space
 
         std::size_t size() const {
             return data.size();
+        }
+
+        void grow(std::size_t i) {
+            data.resize(data.size() + i, 0);
         }
     };
 
