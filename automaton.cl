@@ -113,39 +113,46 @@ __kernel void automaton(uint n,
                         uint m,
                         uint o,
                         uint size,
+                        uint multi_input_n,
                         __constant uint* automatonData,
                         __global const uint* text,
                         __global uint* output,
                         __global char* flags) {
-    uint startpos = get_global_id(0);
-    if (startpos < size) {
-        // set up stack with inital task
-        __private struct stack_entry stack[MAX_STACK_SIZE];
-        uint stack_size = 1;
-        stack[0].pos = startpos;
-        stack[0].state = ID_BEGIN;
+    __private struct stack_entry stack[MAX_STACK_SIZE];
+    uint base_group = get_group_id(0) * multi_input_n * get_local_size(0);
 
-        // run until stack is empty
-        uint iter_count = 0;
-        uint result_state = ID_FAIL;
-        while (stack_size > 0 && result_state != ID_OK) {
-            // pop from stack
-            stack_size -= 1;
-            uint pos = stack[stack_size].pos;
-            uint state = stack[stack_size].state;
+    for (uint i = 0; i < multi_input_n; ++i) {
+        // [group0: [i0: [thread0|..|threadn]|...[thread0|...|threadn]]] | ... | [groupn: [i0: [thread0|..|threadn]|...[thread0|...|threadn]]]
+        uint startpos = base_group + i * get_local_size(0) + get_local_id(0);
 
-            // run automaton until end and check if that branch was successfull
-            uint candidate = run_until_end(pos, state, n, m, o, size, automatonData, text, stack, &stack_size, &iter_count, flags);
-            if (candidate == ID_OK) {
-                result_state = ID_OK;
+        if (startpos < size) {
+            // set up stack with inital task
+            uint stack_size = 1;
+            stack[0].pos = startpos;
+            stack[0].state = ID_BEGIN;
+
+            // run until stack is empty
+            uint iter_count = 0;
+            uint result_state = ID_FAIL;
+            while (stack_size > 0 && result_state != ID_OK) {
+                // pop from stack
+                stack_size -= 1;
+                uint pos = stack[stack_size].pos;
+                uint state = stack[stack_size].state;
+
+                // run automaton until end and check if that branch was successfull
+                uint candidate = run_until_end(pos, state, n, m, o, size, automatonData, text, stack, &stack_size, &iter_count, flags);
+                if (candidate == ID_OK) {
+                    result_state = ID_OK;
+                }
             }
-        }
 
-        // check for final result
-        if (result_state == ID_OK) {
-            output[startpos] = startpos;
-        } else {
-            output[startpos] = RESULT_FAIL;
+            // check for final result
+            if (result_state == ID_OK) {
+                output[startpos] = startpos;
+            } else {
+                output[startpos] = RESULT_FAIL;
+            }
         }
     }
 }
