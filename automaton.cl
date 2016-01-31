@@ -1,13 +1,15 @@
-#define ID_FAIL 0
-#define ID_OK 1
-#define ID_BEGIN 2
-#define RESULT_FAIL 0xffffffff
-#define MAX_ITER_COUNT 512
-#define MAX_STACK_SIZE 16
-#define FLAG_STACK_FULL 0
-#define FLAG_ITER_MAX 1
-#define SYNC_COUNT 32
-#define OVERSIZE_CACHE 2
+/* defines:
+    - FLAG_ITER_MAX
+    - FLAG_STACK_FULL
+    - ID_BEGIN
+    - ID_FAIL
+    - ID_OK
+    - MAX_ITER_COUNT
+    - MAX_STACK_SIZE
+    - OVERSIZE_CACHE
+    - RESULT_FAIL
+    - SYNC_COUNT
+*/
 
 bool is_master() {
     return get_local_id(0) == 0;

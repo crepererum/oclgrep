@@ -1,6 +1,7 @@
 #include <cstdint>
 
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <vector>
 
@@ -17,22 +18,33 @@ static_assert(sizeof(char32_t) == sizeof(std::uint32_t), "uint32 and char32_t ha
 static_assert(sizeof(char) == sizeof(cl_char), "OpenCL char has not the same size as host char");
 
 
-cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& context, const std::vector<cl::Device>& devices) {
+cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& context, const std::vector<cl::Device>& devices, const std::map<std::string, std::string>& defines) {
+    // open file
     std::ifstream file(fname.c_str());
     if (file.fail()) {
         throw user_error("Cannot open file " + fname);
     }
 
+    // dump file content to string
     std::string sourceCode;
     file.seekg(0, std::ios::end);
     sourceCode.reserve(static_cast<std::size_t>(file.tellg()));
     file.seekg(0, std::ios::beg);
     sourceCode.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
+    // create build options string
+    std::stringstream buildOptionsSS;
+    for (const auto& kv : defines) {
+        buildOptionsSS << "-D" << std::get<0>(kv) << "=" << std::get<1>(kv) << " ";
+    }
+    auto buildOptions = buildOptionsSS.str();
+
+    // create and build program
     cl::Program program(context, sourceCode);
     try {
-        program.build(devices);
+        program.build(devices, buildOptions.c_str());
     } catch (const cl::Error& /*e*/) {
+        // assume that this as an build error, dump build log to an exception
         std::stringstream ss;
         ss << "OpenCl build errors:" << std::endl;
         for (const auto& dev : devices) {
@@ -43,10 +55,23 @@ cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& co
         }
         throw internal_exception(ss.str());
     }
+
+    // everything went fine, return final program
     return program;
 }
 
 std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& fcontent) {
+    constexpr std::uint32_t flag_iter_max   = 1;
+    constexpr std::uint32_t flag_stack_full = 0;
+    constexpr std::uint32_t flags_n         = 2;
+    constexpr std::uint32_t group_size      = 16;
+    constexpr std::uint32_t max_iter_count  = 512;
+    constexpr std::uint32_t max_stack_size  = 16;
+    constexpr std::uint32_t multi_input_n   = 2;
+    constexpr std::uint32_t oversize_cache  = 2;
+    constexpr std::uint32_t result_fail     = 0xffffffff;
+    constexpr std::uint32_t sync_count      = 32;
+
     std::vector<cl::Platform> pool_platforms;
     cl::Platform::get(&pool_platforms);
     if (pool_platforms.empty()) {
@@ -71,12 +96,22 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
 
     cl::Context context(devices);
 
-    cl::Program programAutomaton = buildProgramFromFile("automaton.cl", context, devices);
+    std::map<std::string, std::string> buildDefines{
+        {"FLAG_ITER_MAX",   std::to_string(flag_iter_max)},
+        {"FLAG_STACK_FULL", std::to_string(flag_stack_full)},
+        {"ID_BEGIN",        std::to_string(serial::id_begin)},
+        {"ID_FAIL",         std::to_string(serial::id_fail)},
+        {"ID_OK",           std::to_string(serial::id_ok)},
+        {"MAX_ITER_COUNT",  std::to_string(max_iter_count)},
+        {"MAX_STACK_SIZE",  std::to_string(max_stack_size)},
+        {"OVERSIZE_CACHE",  std::to_string(oversize_cache)},
+        {"RESULT_FAIL",     std::to_string(result_fail)},
+        {"SYNC_COUNT",      std::to_string(sync_count)},
+    };
+
+    cl::Program programAutomaton = buildProgramFromFile("automaton.cl", context, devices, buildDefines);
     cl::Kernel kernelAutomaton(programAutomaton, "automaton");
 
-    constexpr std::size_t flags_n = 2;
-    constexpr std::size_t flag_stack_full = 0;
-    constexpr std::size_t flag_iter_max = 1;
     std::vector<char> flags(flags_n, 0);
 
     cl::Buffer dAutomatonData(
@@ -106,10 +141,6 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
         flags.size() * sizeof(char),
         flags.data()
     );
-
-    constexpr std::size_t multi_input_n = 2;
-    constexpr std::size_t oversize_cache = 2;
-    constexpr std::size_t group_size = 16;
 
     kernelAutomaton.setArg(0, static_cast<cl_uint>(graph.n));
     kernelAutomaton.setArg(1, static_cast<cl_uint>(graph.m));
