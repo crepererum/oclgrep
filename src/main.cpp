@@ -24,7 +24,7 @@ std::string readfile(const std::string& fname) {
 }
 
 void print_graph(const serial::graph& g) {
-    std::cout << "graph (n=" << g.n << ", m=" << g.m << ", o=" << g.o << ")" << std::endl;
+    std::cout << "graph (n=" << g.n << ", m=" << g.m << ", o=" << g.o << ", size=" << g.size() << "byte)" << std::endl;
 
     for (std::size_t i_node = 0; i_node < g.n; ++i_node) {
         std::cout << "  node " << i_node << ":" << std::endl;
@@ -70,6 +70,7 @@ int main(int argc, char** argv) {
             ("file", po::value(&file)->required(), "file where we look for the regex")
             ("normalize-regex", "apply NFKC normalization to regex")
             ("normalize-file", "apply NFKC normalization to data from input file")
+            ("print-graph", "print graph data to stdout")
             ("help", "produce help message")
         ;
 
@@ -126,7 +127,9 @@ int main(int argc, char** argv) {
 
         // parse regex to graph
         auto graph = string_to_graph(regex_utf32);
-        print_graph(graph);
+        if (vm.count("print-graph")) {
+            print_graph(graph);
+        }
 
         // tada...
         auto result = runEngine(graph, fcontent_utf32);
