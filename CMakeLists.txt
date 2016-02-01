@@ -2,14 +2,12 @@
 cmake_minimum_required (VERSION 3.0)
 include (ExternalProject)
 set (CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set (CMAKE_C_COMPILER "clang")
-set (CMAKE_CXX_COMPILER "clang++")
 
 # project metadata
 project (oclgrep)
 
 # compiler flags
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -g -gsplit-dwarf -pthread -Wall -Wextra -Wconversion -Wsign-conversion -Wpedantic")
+set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -g -gsplit-dwarf -pthread -Wall -Wextra -Wconversion -Wsign-conversion -Wpedantic -Wno-unknown-pragmas")
 set (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 
 # detect clang

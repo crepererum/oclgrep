@@ -70,22 +70,49 @@ BOOST_FUSION_ADAPT_STRUCT(ast::chunk, content, amount)
 
 
 namespace parser {
-    // http://stackoverflow.com/a/34561232/1718219
-    template<typename T>
-    static auto as = [](auto p) { return x3::rule<struct _, T>{} = x3::as_parser(p); };
+    static x3::rule<class multiplier_amount, ast::multiplier_amount> multiplier_amount = "multiplier_amount";
+    static x3::rule<class multiplier_range, ast::multiplier_range> multiplier_range = "multiplier_range";
+    static x3::rule<class multiplier_plus, ast::multiplier_plus> multiplier_plus = "multiplier_plus";
+    static x3::rule<class multiplier_question, ast::multiplier_question> multiplier_question = "multiplier_question";
+    static x3::rule<class multiplier_star, ast::multiplier_star> multiplier_star = "multiplier_star";
+    static x3::rule<class multiplier, ast::multiplier> multiplier = "multiplier";
+    static x3::rule<class character, ast::character> character = "character";
+    static x3::rule<class characterclass, ast::characterclass> characterclass = "characterclass";
+    static x3::rule<class wordelement, ast::wordelement> wordelement = "wordelement";
+    static x3::rule<class word, ast::word> word = "word";
+    static x3::rule<class chunk, ast::chunk> chunk = "chunk";
+    static x3::rule<class regex, ast::regex> regex = "regex";
 
-    auto const multiplier_amount = as<ast::multiplier_amount>('{' >> x3::uint_ >> '}');
-    auto const multiplier_range = as<ast::multiplier_range>('{' >> -x3::uint_ >> ',' >> -x3::uint_ >> '}');
-    auto const multiplier_plus = as<ast::multiplier_plus>(x3::omit['+']);
-    auto const multiplier_question = as<ast::multiplier_question>(x3::omit['?']);
-    auto const multiplier_star = as<ast::multiplier_star>(x3::omit['*']);
-    auto const multiplier = as<ast::multiplier>(multiplier_range | multiplier_amount | multiplier_plus | multiplier_question | multiplier_star);
-    auto const characterclass = as<ast::characterclass>('[' >> +(x3::char_ - ']') >> ']');
-    auto const character = as<ast::character>(x3::char_ - '[' - ']' - '{' - '}' - '+' - '*' - '?' - static_cast<wchar_t>(0x00000000) - static_cast<wchar_t>(0xffffffff));
-    auto const wordelement = as<ast::wordelement>(characterclass | character);
-    auto const word = as<ast::word>(+wordelement);
-    auto const chunk = as<ast::chunk>((word | characterclass) >> (-multiplier));
-    auto const regex = as<ast::regex>(+chunk);
+    auto const multiplier_amount_def = '{' >> x3::uint_ >> '}';
+    auto const multiplier_range_def = '{' >> -x3::uint_ >> ',' >> -x3::uint_ >> '}';
+    auto const multiplier_plus_def = x3::omit['+'];
+    auto const multiplier_question_def = x3::omit['?'];
+    auto const multiplier_star_def = x3::omit['*'];
+    auto const multiplier_def = multiplier_range | multiplier_amount | multiplier_plus | multiplier_question | multiplier_star;
+    auto const characterclass_def = '[' >> +(x3::char_ - ']') >> ']';
+    auto const character_def = x3::char_ - '[' - ']' - '{' - '}' - '+' - '*' - '?' - static_cast<wchar_t>(0x00000000) - static_cast<wchar_t>(0xffffffff);
+    auto const wordelement_def = characterclass | character;
+    auto const word_def = +wordelement;
+    auto const chunk_def = (word | characterclass) >> (-multiplier);
+    auto const regex_def = +chunk;
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+    BOOST_SPIRIT_DEFINE(
+        multiplier_amount,
+        multiplier_range,
+        multiplier_plus,
+        multiplier_question,
+        multiplier_star,
+        multiplier,
+        character,
+        characterclass,
+        wordelement,
+        word,
+        chunk,
+        regex
+    )
+#pragma clang diagnostic pop
 }
 
 
