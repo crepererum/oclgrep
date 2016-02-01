@@ -145,6 +145,11 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     cl::Kernel kernelTransform(programCollector, "transform");
     cl::Kernel kernelScan(programCollector, "scan");
     cl::Kernel kernelMove(programCollector, "move");
+
+    // OpenCL events
+    cl::Event evtUploadAutomaton;
+    cl::Event evtUploadText;
+    cl::Event evtUploadFlags;
     cl::Event evtKernelAutomaton;
     cl::Event evtKernelTransform;
     std::vector<cl::Event> evtsKernelScan;
@@ -158,16 +163,16 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
 
     cl::Buffer dAutomatonData(
         context,
-        CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+        CL_MEM_READ_ONLY,
         graph.size() * sizeof(std::uint8_t),
-        const_cast<void*>(static_cast<const void*>(graph.data.data())) // that's ok, trust me ;)
+        nullptr
     );
 
     cl::Buffer dText(
         context,
-        CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+        CL_MEM_READ_ONLY,
         fcontent.size() * sizeof(char32_t),
-        const_cast<void*>(static_cast<const void*>(fcontent.data())) // that's ok, trust me ;)
+        nullptr
     );
 
     cl::Buffer dOutput(
@@ -179,9 +184,9 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
 
     cl::Buffer dFlags(
         context,
-        CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
+        CL_MEM_READ_WRITE,
         flags.size() * sizeof(char),
-        flags.data()
+        nullptr
     );
 
     cl::Buffer dScanbuffer0(
@@ -197,6 +202,11 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
         fcontent.size() * sizeof(cl_uint),
         nullptr
     );
+
+    // upload data
+    queue.enqueueWriteBuffer(dAutomatonData, false, 0, graph.size()  * sizeof(std::uint8_t), graph.data.data(), nullptr, &evtUploadAutomaton);
+    queue.enqueueWriteBuffer(dText, false, 0, fcontent.size()  * sizeof(char32_t), fcontent.data(), nullptr, &evtUploadText);
+    queue.enqueueWriteBuffer(dFlags, false, 0, flags.size() * sizeof(char), flags.data(), nullptr, &evtUploadFlags);
 
     // run automaton kernel
     kernelAutomaton.setArg(0, static_cast<cl_uint>(graph.n));
@@ -256,17 +266,24 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
 
     if (printProfile) {
         std::cout << "Profiling data:" << std::endl
-            << "  kernelAutomaton     = " << getEventTimeMS(evtKernelAutomaton) << "ms" << std::endl
-            << "  kernelTransform     = " << getEventTimeMS(evtKernelTransform) << "ms" << std::endl
-            << "  kernelScan          = " << std::endl;
+            << "  uploadAutomaton    = " << getEventTimeMS(evtUploadAutomaton) << "ms" << std::endl
+            << "  uploadText         = " << getEventTimeMS(evtUploadText) << "ms" << std::endl
+            << "  uploadFlags        = " << getEventTimeMS(evtUploadFlags) << "ms" << std::endl
+            << "  kernelAutomaton    = " << getEventTimeMS(evtKernelAutomaton) << "ms" << std::endl
+            << "  kernelTransform    = " << getEventTimeMS(evtKernelTransform) << "ms" << std::endl
+            << "  kernelScan         = " << std::endl;
+        float sumScan = 0.f;
         for (std::size_t i = 0; i < evtsKernelScan.size(); ++i) {
-            std::cout << "    " << getEventTimeMS(evtsKernelScan[i]) << "ms" << std::endl;
+            float t = getEventTimeMS(evtsKernelScan[i]);
+            sumScan += t;
+            std::cout << "    " << t << "ms" << std::endl;
         }
-        std::cout
-            << "  kernelMove          = " << getEventTimeMS(evtKernelMove) << "ms" << std::endl
-            << "  downloadOutputSize  = " << getEventTimeMS(evtDownloadOutputSize) << "ms" << std::endl
-            << "  downloadOutput      = " << getEventTimeMS(evtDownloadOutput) << "ms" << std::endl
-            << "  downloadFlags       = " << getEventTimeMS(evtDownloadFlags) << "ms" << std::endl;
+        std::cout << "    ====" << std::endl
+            << "    " << sumScan << "ms" << std::endl
+            << "  kernelMove         = " << getEventTimeMS(evtKernelMove) << "ms" << std::endl
+            << "  downloadOutputSize = " << getEventTimeMS(evtDownloadOutputSize) << "ms" << std::endl
+            << "  downloadOutput     = " << getEventTimeMS(evtDownloadOutput) << "ms" << std::endl
+            << "  downloadFlags      = " << getEventTimeMS(evtDownloadFlags) << "ms" << std::endl;
     }
 
     if (flags[flag_stack_full]) {
