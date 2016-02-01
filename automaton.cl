@@ -30,22 +30,21 @@ __constant uint* find_next_slot(uint state, uint element, uint n, uint o, __cons
 
     bool searching = true;
 
-    uint idx_next = 0;
-    uint base_next = idx_next * (1 + o);
-    uint x_next = pNodeBody[base_next];
+    __constant uint* pNext = pNodeBody;
+    uint x_next = pNodeBody[0];
 
-    uint idx_current = idx_next; // exception for first round
-    uint base_current = base_next;
+    // exception for first round
+    __constant uint* pCurrent = pNext;
     uint x_current = x_next;
 
-    while (idx_current + 1 < m && searching) {
-        idx_current = idx_next;
-        base_current = base_next;
+    __constant uint* pPreEnd = pNodeBody + (m - 1) * (1 + o);
+
+    while (pNext < pPreEnd && searching) {
+        pCurrent = pNext;
         x_current = x_next;
 
-        idx_next = idx_current + 1;
-        base_next = idx_next * (1 + o);
-        x_next = pNodeBody[base_next];
+        pNext += (1 + o);
+        x_next = *pNext;
 
         if (element >= x_current && element < x_next) {
             searching = false;
@@ -55,7 +54,7 @@ __constant uint* find_next_slot(uint state, uint element, uint n, uint o, __cons
     if (searching) {
         return 0;
     } else {
-        return pNodeBody + base_current + 1;
+        return pCurrent + 1;
     }
 }
 
@@ -73,6 +72,7 @@ struct stack_entry {
     uint state;
 };
 
+#if USE_CACHE != 0
 bool sync(__local uint* active_count, uint iter_count, uint pos, __local uint* cache, __local uint* base_cache, __global const uint* text, uint size) {
     // do not sync every cycle
     if (iter_count % SYNC_COUNT == 0) {
@@ -118,6 +118,7 @@ bool sync(__local uint* active_count, uint iter_count, uint pos, __local uint* c
         return true;
     }
 }
+#endif
 
 uint get_element(uint pos, __local uint* cache, __local uint* cache_base, __global const uint* text) {
 #if USE_CACHE == 0
