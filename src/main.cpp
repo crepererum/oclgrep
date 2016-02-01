@@ -83,10 +83,14 @@ int main(int argc, char** argv) {
         p.add("file", 1);
 
         po::variables_map vm;
-        po::store(
-            po::command_line_parser(argc, argv).options(desc).positional(p).run(),
-            vm
-        );
+        try {
+            po::store(
+                po::command_line_parser(argc, argv).options(desc).positional(p).run(),
+                vm
+            );
+        } catch(std::exception& e) {
+            throw user_error(e.what());
+        }
 
         if (vm.count("help")) {
             std::cout << "oclgrep REGEX FILE" << std::endl
