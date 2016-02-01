@@ -81,6 +81,33 @@ include_directories (
     "include"
 )
 
+# resource files
+# http://www.burtonini.com/blog/computers/ld-blobs-2007-07-13-15-50
+file (GLOB ResFiles "res/*.cl")
+foreach (rfile ${ResFiles})
+    get_filename_component(basename ${rfile} NAME)
+    get_filename_component(rname_blank ${rfile} NAME_WE)
+    set (rname "res_${rname_blank}")
+    add_custom_command (
+        OUTPUT ${rname}.o
+        COMMAND cd ${CMAKE_CURRENT_SOURCE_DIR}/res && ld -r -b binary -o ${CMAKE_CURRENT_BINARY_DIR}/${rname}.o ${basename}
+        COMMAND objcopy --rename-section .data=.rodata,alloc,load,readonly,data,contents ${CMAKE_CURRENT_BINARY_DIR}/${rname}.o ${CMAKE_CURRENT_BINARY_DIR}/${rname}.o
+    )
+    set_source_files_properties (
+        ${rname}.o
+        PROPERTIES
+        EXTERNAL_OBJECT true
+        GENERATED true
+    )
+    add_library (${rname} STATIC ${rname}.o)
+    set_target_properties (
+        ${rname}
+        PROPERTIES
+        LINKER_LANGUAGE C
+    )
+    list (APPEND ResLibs ${rname})
+endforeach ()
+
 # main executable
 aux_source_directory ("src" SourceFiles)
 add_executable (oclgrep ${SourceFiles})
@@ -90,4 +117,5 @@ target_link_libraries (
     boost_locale
     boost_program_options
     OpenCL
+    ${ResLibs}
 )

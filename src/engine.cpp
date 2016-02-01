@@ -14,25 +14,22 @@
 
 #include "common.hpp"
 
+// resource data
+// http://www.burtonini.com/blog/computers/ld-blobs-2007-07-13-15-50
+extern char _binary_automaton_cl_start[];
+extern char _binary_automaton_cl_end[];
+extern char _binary_collector_cl_start[];
+extern char _binary_collector_cl_end[];
+
 
 static_assert(sizeof(std::uint32_t) == sizeof(cl_uint), "OpenCL uint has to be 32bit");
 static_assert(sizeof(char32_t) == sizeof(std::uint32_t), "uint32 and char32_t have to have the same size");
 static_assert(sizeof(char) == sizeof(cl_char), "OpenCL char has not the same size as host char");
 
 
-cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& context, const std::vector<cl::Device>& devices, const std::map<std::string, std::string>& defines) {
-    // open file
-    std::ifstream file(fname.c_str());
-    if (file.fail()) {
-        throw user_error("Cannot open file " + fname);
-    }
-
-    // dump file content to string
-    std::string sourceCode;
-    file.seekg(0, std::ios::end);
-    sourceCode.reserve(static_cast<std::size_t>(file.tellg()));
-    file.seekg(0, std::ios::beg);
-    sourceCode.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+cl::Program buildProgramFromPtr(const char* begin, const char* end, const cl::Context& context, const std::vector<cl::Device>& devices, const std::map<std::string, std::string>& defines) {
+    // dump data to string
+    std::string sourceCode(begin, end);
 
     // create build options string
     std::stringstream buildOptionsSS;
@@ -142,8 +139,8 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
         {"USE_CACHE",       std::to_string(use_cache)},
     };
 
-    cl::Program programAutomaton = buildProgramFromFile("automaton.cl", context, devices, buildDefines);
-    cl::Program programCollector = buildProgramFromFile("collector.cl", context, devices, buildDefines);
+    cl::Program programAutomaton = buildProgramFromPtr(_binary_automaton_cl_start, _binary_automaton_cl_end, context, devices, buildDefines);
+    cl::Program programCollector = buildProgramFromPtr(_binary_collector_cl_start, _binary_collector_cl_end, context, devices, buildDefines);
     cl::Kernel kernelAutomaton(programAutomaton, "automaton");
     cl::Kernel kernelTransform(programCollector, "transform");
     cl::Kernel kernelScan(programCollector, "scan");
