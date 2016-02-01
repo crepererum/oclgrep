@@ -162,11 +162,15 @@ __kernel void automaton(uint n,
 
     // run until stack is empty
     bool work_left = true;
-    uint pos_for_cache = 0xffffffff;
+    uint pos_for_cache = 0xffffffff; // that's ok because cache loader does bounds checking and priorities small inputs
     uint startpos = 0xffffffff; // will never be used
     while (work_left && iter_count < MAX_ITER_COUNT) {
         // 1. refill
         if (stack_size == 0 && input_round < multi_input_n) {
+            // load layout (group > input_round > thread):
+            //   [group_0: [rnd_0: [thread_0|...|thread_z] | ... | [rnd_y: thread_0|...|thread_z]]]
+            //   | ... |
+            //   [group_x: [rnd_0: [thread_0|...|thread_z] | ... | [rnd_y: thread_0|...|thread_z]]]
             startpos = base_group + input_round * GROUP_SIZE + get_local_id(0);
 
             if (startpos < size) {
@@ -182,8 +186,11 @@ __kernel void automaton(uint n,
 
             input_round += 1;
             if (input_round == multi_input_n) {
+                // say goodbye
                 atomic_dec(&active_count);
-                pos_for_cache = 0xffffffff; // do not request any cache data anymore
+
+                // do not request any cache data anymore
+                pos_for_cache = 0xffffffff;
             }
         }
 
@@ -229,7 +236,9 @@ __kernel void automaton(uint n,
                             stack[stack_size].pos = new_pos;
                             stack[stack_size].state = state_for_stack;
                             stack_size += 1;
-                            pos_for_cache = new_pos; // request pos from stack.top to be cached
+
+                            // request pos from stack.top to be cached
+                            pos_for_cache = new_pos;
                         } else {
                             flags[FLAG_STACK_FULL] = 1;
                         }
