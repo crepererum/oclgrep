@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <exception>
 #include <fstream>
 #include <iostream>
@@ -9,6 +10,8 @@
 #include <boost/program_options.hpp>
 
 #include "common.hpp"
+#include "regex_parser.hpp"
+#include "engine.hpp"
 
 namespace po = boost::program_options;
 
@@ -55,6 +58,9 @@ void print_graph(const serial::graph& g) {
 
 int main(int argc, char** argv) {
     try {
+        // config
+        constexpr std::uint32_t max_chunk_size = 16 * 1024 * 1024; // 16M element = 64MB data
+
         // before we start, check if we're working on an UTF8 system
         boost::locale::generator gen;
         std::locale loc = gen("");
@@ -104,30 +110,15 @@ int main(int argc, char** argv) {
             throw user_error(e.what());
         }
 
-        // load file
-        auto fcontent_utf8 = readfile(file);
-        if (fcontent_utf8.empty()) {
-            throw user_error("Empty files cannot be processed!");
-        }
+        // set up OpenCL engine
+        auto eng = std::make_shared<oclengine>();
 
-        // convert external UTF8 data to UTF32
+        // convert regex data
         auto regex_utf32 = boost::locale::conv::utf_to_utf<char32_t>(regex_utf8);
-        auto fcontent_utf32 = boost::locale::conv::utf_to_utf<char32_t>(fcontent_utf8);
-
-        // normalize regex and input
         if (vm.count("normalize-regex")) {
             regex_utf32 = boost::locale::conv::utf_to_utf<char32_t>(
                 boost::locale::normalize(
                     boost::locale::conv::utf_to_utf<wchar_t>(regex_utf32),
-                    boost::locale::norm_nfkc
-                )
-            );
-        }
-        if (vm.count("normalize-file")) {
-            // XXX: we'll have a problem with indices afterwards :(
-            fcontent_utf32 = boost::locale::conv::utf_to_utf<char32_t>(
-                boost::locale::normalize(
-                    boost::locale::conv::utf_to_utf<wchar_t>(fcontent_utf32),
                     boost::locale::norm_nfkc
                 )
             );
@@ -139,12 +130,40 @@ int main(int argc, char** argv) {
             print_graph(graph);
         }
 
-        // tada...
-        auto result = runEngine(graph, fcontent_utf32, vm.count("print-profile"));
+        // set up OpenCL runner
+        oclrunner runner(eng, max_chunk_size, graph, vm.count("print-profile"));
 
-        if (!vm.count("no-output")) {
-            for (const auto& idx : result) {
-                std::cout << idx << std::endl;
+        // load file
+        auto fcontent_utf8 = readfile(file);
+        if (fcontent_utf8.empty()) {
+            throw user_error("Empty files cannot be processed!");
+        }
+
+        // convert input dat
+        auto fcontent_utf32 = boost::locale::conv::utf_to_utf<char32_t>(fcontent_utf8);
+        if (vm.count("normalize-file")) {
+            // XXX: we'll have a problem with indices afterwards :(
+            fcontent_utf32 = boost::locale::conv::utf_to_utf<char32_t>(
+                boost::locale::normalize(
+                    boost::locale::conv::utf_to_utf<wchar_t>(fcontent_utf32),
+                    boost::locale::norm_nfkc
+                )
+            );
+        }
+
+        // tada...
+        for (std::size_t offset = 0; offset < fcontent_utf32.size(); offset += max_chunk_size) {
+            std::size_t end = std::min(offset + max_chunk_size, fcontent_utf32.size());
+            std::u32string chunk(
+                std::next(fcontent_utf32.begin(), static_cast<long>(offset)),
+                std::next(fcontent_utf32.begin(), static_cast<long>(end))
+            );
+            auto result =  runner.run(chunk);
+
+            if (!vm.count("no-output")) {
+                for (const auto& idx : result) {
+                    std::cout << idx << std::endl;
+                }
             }
         }
     } catch (user_error& e) {

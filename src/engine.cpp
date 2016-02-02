@@ -3,16 +3,13 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <vector>
 #include <utility>
 
-#define CL_HPP_ENABLE_EXCEPTIONS
-#define CL_HPP_MINIMUM_OPENCL_VERSION 120
-#define CL_HPP_TARGET_OPENCL_VERSION 120
-#include <CL/cl2.hpp>
-
 #include "common.hpp"
+#include "engine.hpp"
 
 // resource data
 // http://www.burtonini.com/blog/computers/ld-blobs-2007-07-13-15-50
@@ -67,53 +64,12 @@ float getEventTimeMS(const cl::Event& evt) {
     return static_cast<float>(t_end - t_start) / (1000.f * 1000.f);
 }
 
-constexpr std::uint32_t calc_alignement_mask(std::size_t n_bytes) {
-    constexpr std::uint32_t full = ~static_cast<std::uint32_t>(0);
-    std::uint32_t base = static_cast<std::uint32_t>(1) << n_bytes;
-    return full - base + static_cast<std::uint32_t>(1);
-}
-
 constexpr std::size_t adjust_globalsize(std::size_t globalsize, std::size_t localsize) {
     if (globalsize % localsize != 0) {
         globalsize += localsize - globalsize % localsize;
     }
     return globalsize;
 }
-
-class oclengine {
-    public:
-        // config
-        static constexpr std::uint32_t cache_mask      = calc_alignement_mask(7); // sets cache alignement of local text cache base 32
-        static constexpr std::uint32_t flag_iter_max   = 1;                       // index of "we've reached too many iteratios"-flag
-        static constexpr std::uint32_t flag_stack_full = 0;                       // index of "thread-local stack was too small"-flag
-        static constexpr std::uint32_t flags_n         = 2;                       // number of flags
-        static constexpr std::uint32_t group_size      = 64;                      // OpenCL group size
-        static constexpr std::uint32_t max_iter_count  = 2048;                    // limits number of iterations to prevent timeouts
-        static constexpr std::uint32_t max_stack_size  = 128;                     // limits thread-local stack
-        static constexpr std::uint32_t multi_input_n   = 64;                      // load-balancing by using multiple start postions per thread
-        static constexpr std::uint32_t oversize_cache  = 4;                       // cache_size=group_size*oversize_cache
-        static constexpr std::uint32_t result_fail     = 0xffffffff;              // placeholder for "FAIL" results of automaton
-        static constexpr std::uint32_t sync_count      = 128;                     // controls after how many iterations group threads sync
-        static constexpr std::uint32_t use_cache       = 0;                       // controls if kernels use local memory cache
-
-        oclengine();
-
-        std::vector<std::uint32_t> run(const serial::graph& graph, const std::u32string& chunk, bool printProfile);
-
-    private:
-        cl::Platform platform;
-        std::vector<cl::Device> devices;
-        cl::Context context;
-        cl::CommandQueue queue;
-
-        cl::Program programAutomaton;
-        cl::Program programCollector;
-
-        cl::Kernel kernelAutomaton;
-        cl::Kernel kernelTransform;
-        cl::Kernel kernelScan;
-        cl::Kernel kernelMove;
-};
 
 oclengine::oclengine() {
     // set up OpenCL
@@ -164,9 +120,9 @@ oclengine::oclengine() {
     kernelMove = cl::Kernel(programCollector, "move");
 }
 
-std::vector<std::uint32_t> oclengine::run(const serial::graph& graph, const std::u32string& chunk, bool printProfile) {
+oclrunner::oclrunner(const std::shared_ptr<oclengine>& eng, std::uint32_t max_chunk_size, const serial::graph& graph, bool printProfile) : eng(eng), max_chunk_size(max_chunk_size), graph(graph), printProfile(printProfile) {
     // basic checks
-    for (const auto& dev : devices) {
+    for (const auto& dev : eng->devices) {
         if (dev.getInfo<CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE>() < graph.size()) {
             throw user_error("compiled automaton is too large for the OpenCL device!");
         }
@@ -174,6 +130,66 @@ std::vector<std::uint32_t> oclengine::run(const serial::graph& graph, const std:
 
     // OpenCL events
     cl::Event evtUploadAutomaton;
+
+    // create buffer
+    dAutomatonData = cl::Buffer(
+        eng->context,
+        CL_MEM_READ_ONLY,
+        graph.size() * sizeof(std::uint8_t),
+        nullptr
+    );
+
+    dText = cl::Buffer(
+        eng->context,
+        CL_MEM_READ_ONLY,
+        max_chunk_size * sizeof(char32_t),
+        nullptr
+    );
+
+    dOutput = cl::Buffer(
+        eng->context,
+        CL_MEM_READ_WRITE,
+        max_chunk_size * sizeof(cl_uint),
+        nullptr
+    );
+
+    dFlags = cl::Buffer(
+        eng->context,
+        CL_MEM_READ_WRITE,
+        eng->flags_n * sizeof(char),
+        nullptr
+    );
+
+    dScanbuffer0 = cl::Buffer(
+        eng->context,
+        CL_MEM_READ_WRITE,
+        max_chunk_size * sizeof(cl_uint),
+        nullptr
+    );
+
+    dScanbuffer1 = cl::Buffer(
+        eng->context,
+        CL_MEM_READ_WRITE,
+        max_chunk_size * sizeof(cl_uint),
+        nullptr
+    );
+
+    // upload some data
+    eng->queue.enqueueWriteBuffer(dAutomatonData, false, 0, graph.size()  * sizeof(std::uint8_t), graph.data.data(), nullptr, &evtUploadAutomaton);
+
+    eng->queue.finish();
+
+    if (printProfile) {
+        std::cout << "Profiling data:" << std::endl
+            << "  uploadAutomaton    = " << getEventTimeMS(evtUploadAutomaton) << "ms" << std::endl;
+    }
+}
+
+std::vector<std::uint32_t> oclrunner::run(const std::u32string& chunk) {
+    sanity_assert(chunk.size() > 0, "chunk must contain content");
+    sanity_assert(chunk.size() <= max_chunk_size, "chunk is too big for this config");
+
+    // OpenCL events
     cl::Event evtUploadText;
     cl::Event evtUploadFlags;
     cl::Event evtKernelAutomaton;
@@ -184,117 +200,74 @@ std::vector<std::uint32_t> oclengine::run(const serial::graph& graph, const std:
     cl::Event evtDownloadOutput;
     cl::Event evtDownloadFlags;
 
-    // create buffer
-    std::vector<char> flags(flags_n, 0);
-
-    cl::Buffer dAutomatonData(
-        context,
-        CL_MEM_READ_ONLY,
-        graph.size() * sizeof(std::uint8_t),
-        nullptr
-    );
-
-    cl::Buffer dText(
-        context,
-        CL_MEM_READ_ONLY,
-        chunk.size() * sizeof(char32_t),
-        nullptr
-    );
-
-    cl::Buffer dOutput(
-        context,
-        CL_MEM_READ_WRITE,
-        chunk.size() * sizeof(cl_uint),
-        nullptr
-    );
-
-    cl::Buffer dFlags(
-        context,
-        CL_MEM_READ_WRITE,
-        flags.size() * sizeof(char),
-        nullptr
-    );
-
-    cl::Buffer dScanbuffer0(
-        context,
-        CL_MEM_READ_WRITE,
-        chunk.size() * sizeof(cl_uint),
-        nullptr
-    );
-
-    cl::Buffer dScanbuffer1(
-        context,
-        CL_MEM_READ_WRITE,
-        chunk.size() * sizeof(cl_uint),
-        nullptr
-    );
-
     // upload data
-    queue.enqueueWriteBuffer(dAutomatonData, false, 0, graph.size()  * sizeof(std::uint8_t), graph.data.data(), nullptr, &evtUploadAutomaton);
-    queue.enqueueWriteBuffer(dText, false, 0, chunk.size()  * sizeof(char32_t), chunk.data(), nullptr, &evtUploadText);
-    queue.enqueueWriteBuffer(dFlags, false, 0, flags.size() * sizeof(char), flags.data(), nullptr, &evtUploadFlags);
+    std::vector<char> flags(eng->flags_n, 0);
+
+    eng->queue.enqueueWriteBuffer(dText, false, 0, chunk.size()  * sizeof(char32_t), chunk.data(), nullptr, &evtUploadText);
+    eng->queue.enqueueWriteBuffer(dFlags, false, 0, flags.size() * sizeof(char), flags.data(), nullptr, &evtUploadFlags);
 
     // run automaton kernel
-    kernelAutomaton.setArg(0, static_cast<cl_uint>(graph.n));
-    kernelAutomaton.setArg(1, static_cast<cl_uint>(graph.o));
-    kernelAutomaton.setArg(2, static_cast<cl_uint>(chunk.size()));
-    kernelAutomaton.setArg(3, static_cast<cl_uint>(multi_input_n));
-    kernelAutomaton.setArg(4, dAutomatonData);
-    kernelAutomaton.setArg(5, dText);
-    kernelAutomaton.setArg(6, dOutput);
-    kernelAutomaton.setArg(7, dFlags);
-    kernelAutomaton.setArg(8, oversize_cache * group_size * sizeof(char32_t), nullptr);
+    eng->kernelAutomaton.setArg(0, static_cast<cl_uint>(graph.n));
+    eng->kernelAutomaton.setArg(1, static_cast<cl_uint>(graph.o));
+    eng->kernelAutomaton.setArg(2, static_cast<cl_uint>(chunk.size()));
+    eng->kernelAutomaton.setArg(3, static_cast<cl_uint>(eng->multi_input_n));
+    eng->kernelAutomaton.setArg(4, dAutomatonData);
+    eng->kernelAutomaton.setArg(5, dText);
+    eng->kernelAutomaton.setArg(6, dOutput);
+    eng->kernelAutomaton.setArg(7, dFlags);
+    eng->kernelAutomaton.setArg(8, eng->oversize_cache * eng->group_size * sizeof(char32_t), nullptr);
 
-    std::size_t totalSize = chunk.size() / multi_input_n;
-    if (chunk.size() % multi_input_n != 0) {
+    std::size_t totalSize = chunk.size() / eng->multi_input_n;
+    if (chunk.size() % eng->multi_input_n != 0) {
         totalSize += 1;
     }
-    totalSize = adjust_globalsize(totalSize, group_size);
-    queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(totalSize), cl::NDRange(group_size), nullptr, &evtKernelAutomaton);
+    totalSize = adjust_globalsize(totalSize, eng->group_size);
+    eng->queue.enqueueNDRangeKernel(eng->kernelAutomaton, cl::NullRange, cl::NDRange(totalSize), cl::NDRange(eng->group_size), nullptr, &evtKernelAutomaton);
 
     // run transform kernel
-    std::size_t globalsize = adjust_globalsize(chunk.size(), group_size);
-    kernelTransform.setArg(0, dOutput);
-    kernelTransform.setArg(1, dScanbuffer0);
-    kernelTransform.setArg(2, static_cast<cl_uint>(chunk.size()));
-    queue.enqueueNDRangeKernel(kernelTransform, cl::NullRange, cl::NDRange(globalsize), cl::NDRange(group_size), nullptr, &evtKernelTransform);
+    std::size_t globalsize = adjust_globalsize(chunk.size(), eng->group_size);
+    eng->kernelTransform.setArg(0, dOutput);
+    eng->kernelTransform.setArg(1, dScanbuffer0);
+    eng->kernelTransform.setArg(2, static_cast<cl_uint>(chunk.size()));
+    eng->queue.enqueueNDRangeKernel(eng->kernelTransform, cl::NullRange, cl::NDRange(globalsize), cl::NDRange(eng->group_size), nullptr, &evtKernelTransform);
 
     // run scan kernel
     std::size_t offset = 1;
     while (offset < chunk.size()) {
         evtsKernelScan.emplace_back();
-        kernelScan.setArg(0, dScanbuffer0);
-        kernelScan.setArg(1, dScanbuffer1);
-        kernelScan.setArg(2, static_cast<cl_uint>(chunk.size()));
-        kernelScan.setArg(3, static_cast<cl_uint>(offset));
-        queue.enqueueNDRangeKernel(kernelScan, cl::NullRange, cl::NDRange(globalsize), cl::NDRange(group_size), nullptr, &evtsKernelScan[evtsKernelScan.size() - 1]);
+        eng->kernelScan.setArg(0, dScanbuffer0);
+        eng->kernelScan.setArg(1, dScanbuffer1);
+        eng->kernelScan.setArg(2, static_cast<cl_uint>(chunk.size()));
+        eng->kernelScan.setArg(3, static_cast<cl_uint>(offset));
+        eng->queue.enqueueNDRangeKernel(eng->kernelScan, cl::NullRange, cl::NDRange(globalsize), cl::NDRange(eng->group_size), nullptr, &evtsKernelScan[evtsKernelScan.size() - 1]);
         std::swap(dScanbuffer0, dScanbuffer1);
         offset = offset << 1;
     }
 
     // run move kernel
-    kernelMove.setArg(0, dScanbuffer0);
-    kernelMove.setArg(1, dOutput);
-    kernelMove.setArg(2, dScanbuffer1);
-    kernelMove.setArg(3, static_cast<cl_uint>(chunk.size()));
-    queue.enqueueNDRangeKernel(kernelMove, cl::NullRange, cl::NDRange(globalsize), cl::NDRange(group_size), nullptr, &evtKernelMove);
+    eng->kernelMove.setArg(0, dScanbuffer0);
+    eng->kernelMove.setArg(1, dOutput);
+    eng->kernelMove.setArg(2, dScanbuffer1);
+    eng->kernelMove.setArg(3, static_cast<cl_uint>(chunk.size()));
+    eng->queue.enqueueNDRangeKernel(eng->kernelMove, cl::NullRange, cl::NDRange(globalsize), cl::NDRange(eng->group_size), nullptr, &evtKernelMove);
     std::swap(dOutput, dScanbuffer1);
 
     // get output
     std::uint32_t outputSize;
-    queue.enqueueReadBuffer(dScanbuffer0, true, (chunk.size() - 1) * sizeof(cl_uint), 1 * sizeof(cl_uint), &outputSize, nullptr, &evtDownloadOutputSize);
+    eng->queue.enqueueReadBuffer(dScanbuffer0, true, (chunk.size() - 1) * sizeof(cl_uint), 1 * sizeof(cl_uint), &outputSize, nullptr, &evtDownloadOutputSize);
     sanity_assert(outputSize <= chunk.size(), "outputSize must be at max the chunk size");
 
     std::vector<uint32_t> output(outputSize, 0);
-    queue.enqueueReadBuffer(dOutput, false, 0, outputSize * sizeof(cl_uint), output.data(), nullptr, &evtDownloadOutput);
+    if (outputSize > 0) {
+        eng->queue.enqueueReadBuffer(dOutput, false, 0, outputSize * sizeof(cl_uint), output.data(), nullptr, &evtDownloadOutput);
+    }
 
-    queue.enqueueReadBuffer(dFlags, false, 0, flags.size() * sizeof(char), flags.data(), nullptr, &evtDownloadFlags);
+    eng->queue.enqueueReadBuffer(dFlags, false, 0, flags.size() * sizeof(char), flags.data(), nullptr, &evtDownloadFlags);
 
-    queue.finish();
+    eng->queue.finish();
 
     if (printProfile) {
         std::cout << "Profiling data:" << std::endl
-            << "  uploadAutomaton    = " << getEventTimeMS(evtUploadAutomaton) << "ms" << std::endl
             << "  uploadText         = " << getEventTimeMS(evtUploadText) << "ms" << std::endl
             << "  uploadFlags        = " << getEventTimeMS(evtUploadFlags) << "ms" << std::endl
             << "  kernelAutomaton    = " << getEventTimeMS(evtKernelAutomaton) << "ms" << std::endl
@@ -309,22 +282,21 @@ std::vector<std::uint32_t> oclengine::run(const serial::graph& graph, const std:
         std::cout << "    ====" << std::endl
             << "    " << sumScan << "ms" << std::endl
             << "  kernelMove         = " << getEventTimeMS(evtKernelMove) << "ms" << std::endl
-            << "  downloadOutputSize = " << getEventTimeMS(evtDownloadOutputSize) << "ms" << std::endl
-            << "  downloadOutput     = " << getEventTimeMS(evtDownloadOutput) << "ms" << std::endl
+            << "  downloadOutputSize = " << getEventTimeMS(evtDownloadOutputSize) << "ms" << std::endl;
+        if (outputSize > 0) {
+            // only that that case the event got fired
+            std::cout << "  downloadOutput     = " << getEventTimeMS(evtDownloadOutput) << "ms" << std::endl;
+        }
+        std::cout
             << "  downloadFlags      = " << getEventTimeMS(evtDownloadFlags) << "ms" << std::endl;
     }
 
-    if (flags[flag_stack_full]) {
+    if (flags[eng->flag_stack_full]) {
         throw user_error("Automaton engine error: task stack was full!");
     }
-    if (flags[flag_iter_max]) {
+    if (flags[eng->flag_iter_max]) {
         throw user_error("Automaton engine error: reached maximum iteration count!");
     }
 
     return output;
-}
-
-std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& chunk, bool printProfile) {
-    oclengine eng;
-    return eng.run(graph, chunk, printProfile);
 }

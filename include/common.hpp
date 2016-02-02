@@ -73,5 +73,8 @@ namespace serial {
 }
 
 
-serial::graph string_to_graph(const std::u32string& input);
-std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& chunk, bool printProfile);
+constexpr std::uint32_t calc_alignement_mask(std::size_t n_bytes) {
+    constexpr std::uint32_t full = ~static_cast<std::uint32_t>(0);
+    std::uint32_t base = static_cast<std::uint32_t>(1) << n_bytes;
+    return full - base + static_cast<std::uint32_t>(1);
+}

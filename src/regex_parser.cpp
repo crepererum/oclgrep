@@ -19,6 +19,7 @@
 #include <boost/variant/get.hpp>
 
 #include "common.hpp"
+#include "regex_parser.hpp"
 
 
 namespace fusion = boost::fusion;
