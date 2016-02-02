@@ -58,9 +58,6 @@ void print_graph(const serial::graph& g) {
 
 int main(int argc, char** argv) {
     try {
-        // config
-        constexpr std::uint32_t max_chunk_size = 16 * 1024 * 1024; // 16M element = 64MB data
-
         // before we start, check if we're working on an UTF8 system
         boost::locale::generator gen;
         std::locale loc = gen("");
@@ -71,6 +68,7 @@ int main(int argc, char** argv) {
         // parse command line argument
         std::string regex_utf8;
         std::string file;
+        std::uint32_t max_chunk_size;
 
         po::options_description desc("Allowed options");
         desc.add_options()
@@ -81,6 +79,7 @@ int main(int argc, char** argv) {
             ("print-graph", "print graph data to stdout")
             ("print-profile", "print OpenCL profiling data to stdout")
             ("no-output", "do not print actual output (for debug reasons)")
+            ("max-chunk-size", po::value(&max_chunk_size)->default_value(16 * 1024 * 1024), "max number of elements that get pushed to GPU per round, eacht element is 4byte")
             ("help", "produce help message")
         ;
 
@@ -162,7 +161,7 @@ int main(int argc, char** argv) {
 
             if (!vm.count("no-output")) {
                 for (const auto& idx : result) {
-                    std::cout << idx << std::endl;
+                    std::cout << (offset + idx) << std::endl;
                 }
             }
         }
