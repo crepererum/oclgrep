@@ -80,47 +80,64 @@ constexpr std::size_t adjust_globalsize(std::size_t globalsize, std::size_t loca
     return globalsize;
 }
 
-std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& fcontent, bool printProfile) {
-    // config
-    constexpr std::uint32_t cache_mask      = calc_alignement_mask(7); // sets cache alignement of local text cache base 32
-    constexpr std::uint32_t flag_iter_max   = 1;                       // index of "we've reached too many iteratios"-flag
-    constexpr std::uint32_t flag_stack_full = 0;                       // index of "thread-local stack was too small"-flag
-    constexpr std::uint32_t flags_n         = 2;                       // number of flags
-    constexpr std::uint32_t group_size      = 64;                      // OpenCL group size
-    constexpr std::uint32_t max_iter_count  = 2048;                    // limits number of iterations to prevent timeouts
-    constexpr std::uint32_t max_stack_size  = 128;                     // limits thread-local stack
-    constexpr std::uint32_t multi_input_n   = 64;                      // load-balancing by using multiple start postions per thread
-    constexpr std::uint32_t oversize_cache  = 4;                       // cache_size=group_size*oversize_cache
-    constexpr std::uint32_t result_fail     = 0xffffffff;              // placeholder for "FAIL" results of automaton
-    constexpr std::uint32_t sync_count      = 128;                     // controls after how many iterations group threads sync
-    constexpr std::uint32_t use_cache       = 0;                       // controls if kernels use local memory cache
+class oclengine {
+    public:
+        // config
+        static constexpr std::uint32_t cache_mask      = calc_alignement_mask(7); // sets cache alignement of local text cache base 32
+        static constexpr std::uint32_t flag_iter_max   = 1;                       // index of "we've reached too many iteratios"-flag
+        static constexpr std::uint32_t flag_stack_full = 0;                       // index of "thread-local stack was too small"-flag
+        static constexpr std::uint32_t flags_n         = 2;                       // number of flags
+        static constexpr std::uint32_t group_size      = 64;                      // OpenCL group size
+        static constexpr std::uint32_t max_iter_count  = 2048;                    // limits number of iterations to prevent timeouts
+        static constexpr std::uint32_t max_stack_size  = 128;                     // limits thread-local stack
+        static constexpr std::uint32_t multi_input_n   = 64;                      // load-balancing by using multiple start postions per thread
+        static constexpr std::uint32_t oversize_cache  = 4;                       // cache_size=group_size*oversize_cache
+        static constexpr std::uint32_t result_fail     = 0xffffffff;              // placeholder for "FAIL" results of automaton
+        static constexpr std::uint32_t sync_count      = 128;                     // controls after how many iterations group threads sync
+        static constexpr std::uint32_t use_cache       = 0;                       // controls if kernels use local memory cache
 
+        oclengine();
+
+        std::vector<std::uint32_t> run(const serial::graph& graph, const std::u32string& chunk, bool printProfile);
+
+    private:
+        cl::Platform platform;
+        std::vector<cl::Device> devices;
+        cl::Context context;
+        cl::CommandQueue queue;
+
+        cl::Program programAutomaton;
+        cl::Program programCollector;
+
+        cl::Kernel kernelAutomaton;
+        cl::Kernel kernelTransform;
+        cl::Kernel kernelScan;
+        cl::Kernel kernelMove;
+};
+
+oclengine::oclengine() {
     // set up OpenCL
     std::vector<cl::Platform> pool_platforms;
     cl::Platform::get(&pool_platforms);
     if (pool_platforms.empty()) {
         throw user_error("no OpenCL platforms found!");
     }
-    cl::Platform platform = pool_platforms[0]; // XXX: make this selectable!
+    platform = pool_platforms[0]; // XXX: make this selectable!
 
     std::vector<cl::Device> pool_devices;
     platform.getDevices(CL_DEVICE_TYPE_ALL, &pool_devices);
     if (pool_devices.empty()) {
         throw user_error("no OpenCL devices found!");
     }
-    std::vector<cl::Device> devices{pool_devices[0]}; // XXX: make this a user choice!
+    devices = {pool_devices[0]}; // XXX: make this a user choice!
     for (const auto& dev : devices) {
         if (!dev.getInfo<CL_DEVICE_ENDIAN_LITTLE>()) {
             throw user_error("not all selected devices are little endian!");
         }
-        if (dev.getInfo<CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE>() < graph.size()) {
-            throw user_error("compiled automaton is too large for the OpenCL device!");
-        }
     }
 
-    cl::Context context(devices);
-
-    cl::CommandQueue queue(context, devices[0], cl::QueueProperties::Profiling);
+    context = cl::Context(devices);
+    queue = cl::CommandQueue(context, devices[0], cl::QueueProperties::Profiling);
 
     // build kernel
     std::map<std::string, std::string> buildDefines{
@@ -139,12 +156,21 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
         {"USE_CACHE",       std::to_string(use_cache)},
     };
 
-    cl::Program programAutomaton = buildProgramFromPtr(_binary_automaton_cl_start, _binary_automaton_cl_end, context, devices, buildDefines);
-    cl::Program programCollector = buildProgramFromPtr(_binary_collector_cl_start, _binary_collector_cl_end, context, devices, buildDefines);
-    cl::Kernel kernelAutomaton(programAutomaton, "automaton");
-    cl::Kernel kernelTransform(programCollector, "transform");
-    cl::Kernel kernelScan(programCollector, "scan");
-    cl::Kernel kernelMove(programCollector, "move");
+    programAutomaton = buildProgramFromPtr(_binary_automaton_cl_start, _binary_automaton_cl_end, context, devices, buildDefines);
+    programCollector = buildProgramFromPtr(_binary_collector_cl_start, _binary_collector_cl_end, context, devices, buildDefines);
+    kernelAutomaton = cl::Kernel(programAutomaton, "automaton");
+    kernelTransform = cl::Kernel(programCollector, "transform");
+    kernelScan = cl::Kernel(programCollector, "scan");
+    kernelMove = cl::Kernel(programCollector, "move");
+}
+
+std::vector<std::uint32_t> oclengine::run(const serial::graph& graph, const std::u32string& chunk, bool printProfile) {
+    // basic checks
+    for (const auto& dev : devices) {
+        if (dev.getInfo<CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE>() < graph.size()) {
+            throw user_error("compiled automaton is too large for the OpenCL device!");
+        }
+    }
 
     // OpenCL events
     cl::Event evtUploadAutomaton;
@@ -171,14 +197,14 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     cl::Buffer dText(
         context,
         CL_MEM_READ_ONLY,
-        fcontent.size() * sizeof(char32_t),
+        chunk.size() * sizeof(char32_t),
         nullptr
     );
 
     cl::Buffer dOutput(
         context,
         CL_MEM_READ_WRITE,
-        fcontent.size() * sizeof(cl_uint),
+        chunk.size() * sizeof(cl_uint),
         nullptr
     );
 
@@ -192,26 +218,26 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     cl::Buffer dScanbuffer0(
         context,
         CL_MEM_READ_WRITE,
-        fcontent.size() * sizeof(cl_uint),
+        chunk.size() * sizeof(cl_uint),
         nullptr
     );
 
     cl::Buffer dScanbuffer1(
         context,
         CL_MEM_READ_WRITE,
-        fcontent.size() * sizeof(cl_uint),
+        chunk.size() * sizeof(cl_uint),
         nullptr
     );
 
     // upload data
     queue.enqueueWriteBuffer(dAutomatonData, false, 0, graph.size()  * sizeof(std::uint8_t), graph.data.data(), nullptr, &evtUploadAutomaton);
-    queue.enqueueWriteBuffer(dText, false, 0, fcontent.size()  * sizeof(char32_t), fcontent.data(), nullptr, &evtUploadText);
+    queue.enqueueWriteBuffer(dText, false, 0, chunk.size()  * sizeof(char32_t), chunk.data(), nullptr, &evtUploadText);
     queue.enqueueWriteBuffer(dFlags, false, 0, flags.size() * sizeof(char), flags.data(), nullptr, &evtUploadFlags);
 
     // run automaton kernel
     kernelAutomaton.setArg(0, static_cast<cl_uint>(graph.n));
     kernelAutomaton.setArg(1, static_cast<cl_uint>(graph.o));
-    kernelAutomaton.setArg(2, static_cast<cl_uint>(fcontent.size()));
+    kernelAutomaton.setArg(2, static_cast<cl_uint>(chunk.size()));
     kernelAutomaton.setArg(3, static_cast<cl_uint>(multi_input_n));
     kernelAutomaton.setArg(4, dAutomatonData);
     kernelAutomaton.setArg(5, dText);
@@ -219,27 +245,27 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     kernelAutomaton.setArg(7, dFlags);
     kernelAutomaton.setArg(8, oversize_cache * group_size * sizeof(char32_t), nullptr);
 
-    std::size_t totalSize = fcontent.size() / multi_input_n;
-    if (fcontent.size() % multi_input_n != 0) {
+    std::size_t totalSize = chunk.size() / multi_input_n;
+    if (chunk.size() % multi_input_n != 0) {
         totalSize += 1;
     }
     totalSize = adjust_globalsize(totalSize, group_size);
     queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(totalSize), cl::NDRange(group_size), nullptr, &evtKernelAutomaton);
 
     // run transform kernel
-    std::size_t globalsize = adjust_globalsize(fcontent.size(), group_size);
+    std::size_t globalsize = adjust_globalsize(chunk.size(), group_size);
     kernelTransform.setArg(0, dOutput);
     kernelTransform.setArg(1, dScanbuffer0);
-    kernelTransform.setArg(2, static_cast<cl_uint>(fcontent.size()));
+    kernelTransform.setArg(2, static_cast<cl_uint>(chunk.size()));
     queue.enqueueNDRangeKernel(kernelTransform, cl::NullRange, cl::NDRange(globalsize), cl::NDRange(group_size), nullptr, &evtKernelTransform);
 
     // run scan kernel
     std::size_t offset = 1;
-    while (offset < fcontent.size()) {
+    while (offset < chunk.size()) {
         evtsKernelScan.emplace_back();
         kernelScan.setArg(0, dScanbuffer0);
         kernelScan.setArg(1, dScanbuffer1);
-        kernelScan.setArg(2, static_cast<cl_uint>(fcontent.size()));
+        kernelScan.setArg(2, static_cast<cl_uint>(chunk.size()));
         kernelScan.setArg(3, static_cast<cl_uint>(offset));
         queue.enqueueNDRangeKernel(kernelScan, cl::NullRange, cl::NDRange(globalsize), cl::NDRange(group_size), nullptr, &evtsKernelScan[evtsKernelScan.size() - 1]);
         std::swap(dScanbuffer0, dScanbuffer1);
@@ -250,13 +276,15 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     kernelMove.setArg(0, dScanbuffer0);
     kernelMove.setArg(1, dOutput);
     kernelMove.setArg(2, dScanbuffer1);
-    kernelMove.setArg(3, static_cast<cl_uint>(fcontent.size()));
+    kernelMove.setArg(3, static_cast<cl_uint>(chunk.size()));
     queue.enqueueNDRangeKernel(kernelMove, cl::NullRange, cl::NDRange(globalsize), cl::NDRange(group_size), nullptr, &evtKernelMove);
     std::swap(dOutput, dScanbuffer1);
 
     // get output
-    std::size_t outputSize;
-    queue.enqueueReadBuffer(dScanbuffer0, true, (fcontent.size() - 1) * sizeof(cl_uint), 1 * sizeof(cl_uint), &outputSize, nullptr, &evtDownloadOutputSize);
+    std::uint32_t outputSize;
+    queue.enqueueReadBuffer(dScanbuffer0, true, (chunk.size() - 1) * sizeof(cl_uint), 1 * sizeof(cl_uint), &outputSize, nullptr, &evtDownloadOutputSize);
+    sanity_assert(outputSize <= chunk.size(), "outputSize must be at max the chunk size");
+
     std::vector<uint32_t> output(outputSize, 0);
     queue.enqueueReadBuffer(dOutput, false, 0, outputSize * sizeof(cl_uint), output.data(), nullptr, &evtDownloadOutput);
 
@@ -294,4 +322,9 @@ std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32s
     }
 
     return output;
+}
+
+std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& chunk, bool printProfile) {
+    oclengine eng;
+    return eng.run(graph, chunk, printProfile);
 }

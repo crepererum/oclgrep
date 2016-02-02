@@ -74,4 +74,4 @@ namespace serial {
 
 
 serial::graph string_to_graph(const std::u32string& input);
-std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& fcontent, bool printProfile);
+std::vector<std::uint32_t> runEngine(const serial::graph& graph, const std::u32string& chunk, bool printProfile);
