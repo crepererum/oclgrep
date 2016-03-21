@@ -93,13 +93,7 @@ bool sync(__local uint* active_count, uint iter_count, uint pos, __local uint* c
             uint base_cache_aligned = *base_cache & (uint)(CACHE_MASK);
 
             // load cache
-            for (uint i = 0; i < OVERSIZE_CACHE; ++i) {
-                uint idx_cache = i * GROUP_SIZE + get_local_id(0);
-                uint idx_text = base_cache_aligned + idx_cache;
-                if (idx_text < size) {
-                    cache[idx_cache] = text[idx_text];
-                }
-            }
+            event_t evt = async_work_group_copy(cache, text + base_cache_aligned, GROUP_SIZE * OVERSIZE_CACHE, 0);
 
             // master writes back aligned cache base
             if (is_master()) {
@@ -107,7 +101,7 @@ bool sync(__local uint* active_count, uint iter_count, uint pos, __local uint* c
             }
 
             // final barrier
-            barrier(CLK_LOCAL_MEM_FENCE);
+            wait_group_events(1, &evt);
 
             return true;
         } else {
