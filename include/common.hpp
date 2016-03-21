@@ -49,14 +49,18 @@ class sanity_error : public std::exception {
 namespace serial {
     using character = char32_t;
     using id = std::uint32_t;
-    using buffer = std::vector<std::uint8_t>;
+    using word = std::uint32_t;
+    using buffer = std::vector<word>;
+
+    static_assert(sizeof(character) == sizeof(word), "that won't serialize very well!");
+    static_assert(sizeof(id) == sizeof(word), "that won't serialize very well!");
 
     struct graph {
         std::size_t n;                  // number of nodes
         std::size_t o;                  // maximum cardinality of multi-edges
         buffer data; // size = n * m * (sizeof(character) + o * sizeof(id))
 
-        graph(std::size_t n, std::size_t o) : n(n), o(o), data(n * sizeof(id), 0) {} // 0 is also the id of fail, so good for unused space
+        graph(std::size_t n, std::size_t o) : n(n), o(o), data(n, 0) {} // 0 is also the id of fail, so good for unused space
 
         std::size_t size() const {
             return data.size();

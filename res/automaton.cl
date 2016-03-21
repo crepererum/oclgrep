@@ -19,7 +19,7 @@ bool is_master() {
 }
 
 __constant uint* find_next_slot(uint state, uint element, uint n, uint o, __constant uint* automatonData) {
-    const uint base_node = automatonData[state] >> 2; // be careful about bytes vs indices!
+    const uint base_node = automatonData[state];
     __constant uint* pNode = automatonData + base_node;
     const uint m = pNode[0];
     __constant uint* pNodeBody = pNode + 1;

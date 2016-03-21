@@ -132,10 +132,11 @@ oclrunner::oclrunner(const std::shared_ptr<oclengine>& eng, std::uint32_t max_ch
     cl::Event evtUploadAutomaton;
 
     // create buffer
+    static_assert(sizeof(serial::word) == sizeof(std::uint32_t), "ah, that won't work with OpenCL");
     dAutomatonData = cl::Buffer(
         eng->context,
         CL_MEM_READ_ONLY,
-        graph.size() * sizeof(std::uint8_t),
+        graph.size() * sizeof(std::uint32_t),
         nullptr
     );
 
@@ -175,7 +176,7 @@ oclrunner::oclrunner(const std::shared_ptr<oclengine>& eng, std::uint32_t max_ch
     );
 
     // upload some data
-    eng->queue.enqueueWriteBuffer(dAutomatonData, false, 0, graph.size()  * sizeof(std::uint8_t), graph.data.data(), nullptr, &evtUploadAutomaton);
+    eng->queue.enqueueWriteBuffer(dAutomatonData, false, 0, graph.size()  * sizeof(std::uint32_t), graph.data.data(), nullptr, &evtUploadAutomaton);
 
     eng->queue.finish();
 

@@ -367,9 +367,12 @@ graph::graph_t ast_to_graph(const ast::regex& r) {
 
 template <typename T>
 void write_to_buffer(serial::buffer& b, std::size_t base, T element) {
+    static_assert(sizeof(serial::word) == 4, "ups, need to rewrite the serializer!");
+    static_assert(sizeof(T) % sizeof(serial::word) == 0, "that doesn't match the word boundaries!");
+
     // XXX: check big vs little endian!
-    for (std::size_t i = 0; i < sizeof(T); ++i) {
-        b[base + i] = (element >> (8 * i)) & 0xff;
+    for (std::size_t i = 0; i < sizeof(T) / sizeof(serial::word); ++i) {
+        b[base + i] = (element >> (8 * 4 * i)) & 0xffffffff;
     }
 }
 
@@ -396,33 +399,33 @@ serial::graph serialize(const graph::graph_t& g) {
         std::size_t base_node = result.size();
 
         // write current size to dispatch table
-        write_to_buffer(result.data, i_node * sizeof(serial::id), static_cast<serial::id>(base_node));
+        write_to_buffer(result.data, i_node, static_cast<serial::id>(base_node));
 
         // start node by writing its size
-        result.grow(sizeof(serial::id));
+        result.grow(1);
         write_to_buffer(result.data, base_node, static_cast<serial::id>(node->next.size()));
 
         // write node body
-        std::size_t base_node_body = base_node + sizeof(serial::id);
+        std::size_t base_node_body = base_node + 1;
         for (std::size_t i_value_slot = 0; i_value_slot < node->next.size(); ++i_value_slot) {
             const auto& value_slot = node->next[i_value_slot];
 
-            std::size_t base_value_slot = base_node_body + i_value_slot * (sizeof(serial::character) + o * sizeof(serial::id));
+            std::size_t base_value_slot = base_node_body + i_value_slot * (1 + o);
             serial::character c = std::get<0>(value_slot);
 
             // write character that belongs to slot
-            result.grow(sizeof(serial::character));
+            result.grow(1);
             write_to_buffer(result.data, base_value_slot, c);
 
             // write fixed size, sorted, dedup data to slot
-            std::size_t base_value_slot_payload = base_value_slot + sizeof(serial::character);
+            std::size_t base_value_slot_payload = base_value_slot + 1;
             std::vector<std::uint32_t> entries_sorted(std::get<1>(value_slot)->begin(), std::get<1>(value_slot)->end());
             std::sort(entries_sorted.begin(), entries_sorted.end());
             entries_sorted.erase(std::unique(entries_sorted.begin(), entries_sorted.end()), entries_sorted.end());
             for (std::size_t i_slot_entry = 0; i_slot_entry < o; ++i_slot_entry) {
-                result.grow(sizeof(serial::id));
+                result.grow(1);
                 if (i_slot_entry < entries_sorted.size()) {
-                    std::size_t base_slot_entry = base_value_slot_payload + i_slot_entry * sizeof(serial::id);
+                    std::size_t base_slot_entry = base_value_slot_payload + i_slot_entry;
                     serial::id id = entries_sorted[i_slot_entry];
                     write_to_buffer(result.data, base_slot_entry, id);
                 } // else => data is 0
