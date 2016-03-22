@@ -48,16 +48,26 @@ namespace ast {
 
     using multiplier = boost::variant<multiplier_range, multiplier_amount, multiplier_plus, multiplier_question, multiplier_star>;
 
-    using characterclass = std::vector<char32_t>;
-
     using character = char32_t;
 
-    using wordelement = boost::variant<character, characterclass>;
+    struct character_range {
+        character begin;
+        character end;
 
-    using word = std::vector<wordelement>;
+        character_range() = default;
+        character_range(character begin, character end) : begin(begin), end(end) {}
+    };
+
+    using characterclass_element = boost::variant<character_range, character>;
+
+    using characterclass = std::vector<characterclass_element>;
+
+    using word = std::vector<character>;
+
+    using chunkcontent = boost::variant<characterclass, word>;
 
     struct chunk {
-        word content;
+        chunkcontent content;
         boost::optional<multiplier> amount;
     };
 
@@ -67,6 +77,7 @@ namespace ast {
 }
 
 BOOST_FUSION_ADAPT_STRUCT(ast::multiplier_range, min, max)
+BOOST_FUSION_ADAPT_STRUCT(ast::character_range, begin, end)
 BOOST_FUSION_ADAPT_STRUCT(ast::chunk, content, amount)
 
 
@@ -78,9 +89,11 @@ namespace parser {
     static x3::rule<class multiplier_star, ast::multiplier_star> multiplier_star = "multiplier_star";
     static x3::rule<class multiplier, ast::multiplier> multiplier = "multiplier";
     static x3::rule<class character, ast::character> character = "character";
+    static x3::rule<class character_range, ast::character_range> character_range = "character_range";
+    static x3::rule<class characterclass_element, ast::characterclass_element> characterclass_element = "characterclass_element";
     static x3::rule<class characterclass, ast::characterclass> characterclass = "characterclass";
-    static x3::rule<class wordelement, ast::wordelement> wordelement = "wordelement";
     static x3::rule<class word, ast::word> word = "word";
+    static x3::rule<class chunkcontent, ast::chunkcontent> chunkcontent = "chunkcontent";
     static x3::rule<class chunk, ast::chunk> chunk = "chunk";
     static x3::rule<class regex, ast::regex> regex = "regex";
 
@@ -90,11 +103,14 @@ namespace parser {
     auto const multiplier_question_def = x3::omit['?'];
     auto const multiplier_star_def = x3::omit['*'];
     auto const multiplier_def = multiplier_range | multiplier_amount | multiplier_plus | multiplier_question | multiplier_star;
-    auto const characterclass_def = '[' >> +(x3::char_ - ']') >> ']';
-    auto const character_def = x3::char_ - '[' - ']' - '{' - '}' - '+' - '*' - '?' - static_cast<wchar_t>(0x00000000) - static_cast<wchar_t>(0xffffffff);
+    auto const character_def = x3::char_ - '[' - ']' - '{' - '}' - '+' - '*' - '?' - '-' - static_cast<wchar_t>(0x00000000) - static_cast<wchar_t>(0xffffffff);
+    auto const character_range_def = character >> '-' >> character;
+    auto const characterclass_element_def = character_range | character;
+    auto const characterclass_def = '[' >> +(characterclass_element) >> ']';
     auto const wordelement_def = characterclass | character;
-    auto const word_def = +wordelement;
-    auto const chunk_def = (word | characterclass) >> (-multiplier);
+    auto const word_def = +character;
+    auto const chunkcontent_def = characterclass | word;
+    auto const chunk_def = chunkcontent >> (-multiplier);
     auto const regex_def = +chunk;
 
 #pragma clang diagnostic push
@@ -107,9 +123,11 @@ namespace parser {
         multiplier_star,
         multiplier,
         character,
+        character_range,
+        characterclass_element,
         characterclass,
-        wordelement,
         word,
+        chunkcontent,
         chunk,
         regex
     )
@@ -158,6 +176,17 @@ namespace transformers {
     using collection_slots_t = std::vector<graph::slot_t>;
     using transformer_result_t = std::pair<graph::graph_t, collection_slots_t>;
 
+    class characterclass_element_visitor : public boost::static_visitor<ast::character_range> {
+        public:
+            ast::character_range operator()(const ast::character& character) const {
+                return ast::character_range(character, character);
+            }
+
+            ast::character_range operator()(const ast::character_range& character_range) const {
+                return character_range;
+            }
+    };
+
     class generic_visitor : public boost::static_visitor<transformer_result_t> {
         public:
             generic_visitor(std::uint32_t& id, collection_slots_t slots) : id(id), slots(slots) {}
@@ -167,7 +196,7 @@ namespace transformers {
             collection_slots_t slots;
     };
 
-    class wordelement_transformer : public generic_visitor {
+    class character_transformer : public generic_visitor {
         public:
             using generic_visitor::generic_visitor;
 
@@ -191,6 +220,22 @@ namespace transformers {
                 // 5. done
                 return {graph::graph_t{std::move(result)}, slots_new};
             }
+    };
+
+    class chunkcontent_transformer : public generic_visitor {
+        public:
+            using generic_visitor::generic_visitor;
+
+            transformer_result_t operator()(const ast::word& word) const {
+                graph::graph_t result_nodes;
+                collection_slots_t slots_new = slots;
+                for (const auto& character : word) {
+                    auto sub_result = character_transformer(id, slots_new)(character);
+                    result_nodes.insert(result_nodes.end(), std::get<0>(sub_result).begin(), std::get<0>(sub_result).end());
+                    slots_new = std::get<1>(sub_result);
+                }
+                return std::make_pair(result_nodes, slots_new);
+            }
 
             transformer_result_t operator()(const ast::characterclass& characterclass) const {
                 // 1. create new node
@@ -201,18 +246,39 @@ namespace transformers {
                     last->push_back(result->id);
                 }
 
-                // 3. fill this one
+                // 3. prepare and merge ranges
+                std::vector<ast::character_range> ranges;
+                for (const auto& x : characterclass) {
+                    ranges.push_back(boost::apply_visitor(characterclass_element_visitor(), x));
+                }
+                std::sort(ranges.begin(), ranges.end(), [](const ast::character_range& a, const ast::character_range& b) {
+                    return a.begin < b.begin;
+                });
+                std::vector<ast::character_range> ranges_dedup;
+                for (const auto& x : ranges) {
+                    if (ranges_dedup.empty()) {
+                        ranges_dedup.push_back(x);
+                    } else {
+                        auto& last = ranges_dedup[ranges_dedup.size() - 1];
+                        if (x.begin <= last.end + 1) {
+                            last.end = x.end;
+                        } else {
+                            ranges_dedup.push_back(x);
+                        }
+                    }
+                }
+
+                // 4. fill this one
                 result->next.push_back(std::make_pair(0, graph::make_slot({serial::id_fail})));
                 collection_slots_t slots_new{};
                 char32_t last_char = 0;
-                std::set<ast::character> chars_dedup_sorted(characterclass.begin(), characterclass.end());
-                for (const auto& character : chars_dedup_sorted) {
-                    if (character > last_char + 1 && last_char > 0) { // add range up to this element, skip first
+                for (const auto& r : ranges_dedup) {
+                    if (last_char > 0) { // add range up to this element, skip first
                         result->next.push_back(std::make_pair(last_char + 1, graph::make_slot({serial::id_fail})));
                     }
-                    result->next.push_back(std::make_pair(character, graph::make_slot({})));
+                    result->next.push_back(std::make_pair(r.begin, graph::make_slot({})));
                     slots_new.push_back(std::get<1>(result->next[result->next.size() - 1]));
-                    last_char = character;
+                    last_char = r.end;
                 }
                 result->next.push_back(std::make_pair(last_char + 1, graph::make_slot({serial::id_fail})));
 
@@ -221,25 +287,9 @@ namespace transformers {
             }
     };
 
-    class word_transformer : public generic_visitor {
-        public:
-            using generic_visitor::generic_visitor;
-
-            transformer_result_t operator()(const ast::word& word) const {
-                graph::graph_t result_nodes;
-                collection_slots_t slots_new = slots;
-                for (const auto& wordelement : word) {
-                    auto sub_result = boost::apply_visitor(wordelement_transformer(id, slots_new), wordelement);
-                    result_nodes.insert(result_nodes.end(), std::get<0>(sub_result).begin(), std::get<0>(sub_result).end());
-                    slots_new = std::get<1>(sub_result);
-                }
-                return std::make_pair(result_nodes, slots_new);
-            }
-    };
-
     class multiplier_transformator : public generic_visitor {
         public:
-            multiplier_transformator(std::uint32_t& id, collection_slots_t slots, const ast::word& content) : generic_visitor(id, slots), content(content) {}
+            multiplier_transformator(std::uint32_t& id, collection_slots_t slots, const ast::chunkcontent& content) : generic_visitor(id, slots), content(content) {}
 
             transformer_result_t operator()(const ast::multiplier_amount& amount) const {
                 return doit(amount, ast::optional_n(amount));
@@ -269,7 +319,7 @@ namespace transformers {
             }
 
         protected:
-            const ast::word& content;
+            const ast::chunkcontent& content;
 
             transformer_result_t doit(std::size_t min, ast::optional_n max) const {
                 graph::graph_t nodes_result;
@@ -279,7 +329,7 @@ namespace transformers {
                 graph::graph_t nodes_current;
                 std::size_t i = 0;
                 for (; i < min; ++i) {
-                    auto sub_result = word_transformer(id, slots_current)(content);
+                    auto sub_result = boost::apply_visitor(chunkcontent_transformer(id, slots_current), content);
                     nodes_result.insert(nodes_result.end(), nodes_current.begin(), nodes_current.end());
                     std::tie(nodes_current, slots_current) = sub_result;
                 }
@@ -292,7 +342,7 @@ namespace transformers {
 
                     // a) create nodes
                     for (; i <= *max; ++i) {
-                        auto sub_result = word_transformer(id, slots_current)(content);
+                        auto sub_result = boost::apply_visitor(chunkcontent_transformer(id, slots_current), content);
                         nodes_result.insert(nodes_result.end(), nodes_current.begin(), nodes_current.end());
                         slots_result.insert(slots_result.end(), slots_current.begin(), slots_current.end());
                         std::tie(nodes_current, slots_current) = sub_result;
@@ -307,7 +357,7 @@ namespace transformers {
                     // no max => create new word and link slots to nodes current (loop)
 
                     // a) create node
-                    auto sub_result = word_transformer(id, slots_current)(content);
+                    auto sub_result = boost::apply_visitor(chunkcontent_transformer(id, slots_current), content);
                     nodes_result.insert(nodes_result.end(), nodes_current.begin(), nodes_current.end());
                     slots_result.insert(slots_result.end(), slots_current.begin(), slots_current.end());
                     std::tie(nodes_current, slots_current) = sub_result;
@@ -333,7 +383,7 @@ namespace transformers {
                 if (chunk.amount) {
                     return boost::apply_visitor(multiplier_transformator(id, slots, chunk.content), *(chunk.amount));
                 } else {
-                    return word_transformer(id, slots)(chunk.content);
+                    return boost::apply_visitor(chunkcontent_transformer(id, slots), chunk.content);
                 }
             }
     };
