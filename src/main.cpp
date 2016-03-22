@@ -32,7 +32,15 @@ void print_graph(const serial::graph& g) {
     for (std::size_t i_node = 0; i_node < g.n; ++i_node) {
         std::size_t base_node = *reinterpret_cast<const serial::id*>(&g.data[i_node]);
         std::size_t m = *reinterpret_cast<const serial::id*>(&g.data[base_node]);
-        std::cout << "  node" << i_node << " (m=" << m << "):" << std::endl;
+        std::cout << "  node" << i_node << " (m=" << m;
+        if (i_node == serial::id_begin) {
+            std::cout << ", BEGIN";
+        } else if (i_node == serial::id_fail) {
+            std::cout << ", FAIL";
+        } else if (i_node == serial::id_ok) {
+            std::cout << ", OK";
+        }
+        std::cout << "):" << std::endl;
 
         std::size_t base_node_body = base_node + 1;
         for (std::size_t i_value_slot = 0; i_value_slot < m; ++i_value_slot) {
