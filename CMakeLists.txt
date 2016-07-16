@@ -119,3 +119,21 @@ target_link_libraries (
     OpenCL
     ${ResLibs}
 )
+
+# fuzzing projects
+set (SourceFilesNoMain ${SourceFiles})
+list (REMOVE_ITEM SourceFilesNoMain "src/main.cpp")
+file (GLOB FuzzFiles "fuzz/*.cpp")
+foreach (ffile ${FuzzFiles})
+    get_filename_component(fname_blank ${ffile} NAME_WE)
+    set (fname "fuzz_${fname_blank}")
+    add_executable (${fname} ${ffile} ${SourceFilesNoMain})
+    add_dependencies (${fname} project_clhpp)
+    target_link_libraries (
+        ${fname}
+        boost_locale
+        boost_program_options
+        OpenCL
+        ${ResLibs}
+    )
+endforeach ()
