@@ -20,6 +20,7 @@
 
 #include "common.hpp"
 #include "regex_parser.hpp"
+#include "config.hpp"
 
 
 namespace fusion = boost::fusion;
@@ -267,6 +268,9 @@ namespace transformers {
                         }
                     }
                 }
+                if (ranges_dedup.size() > cfg::max_ranges) {
+                    throw user_error("Too many ranges in character class!");
+                }
 
                 // 4. fill this one
                 result->next.push_back(std::make_pair(0, graph::make_slot({serial::id_fail})));
@@ -322,6 +326,12 @@ namespace transformers {
             const ast::chunkcontent& content;
 
             transformer_result_t doit(std::size_t min, ast::optional_n max) const {
+                if (min > cfg::max_multiplier) {
+                    throw user_error("multiplier minimum is too large!");
+                }
+                if (max && *max > cfg::max_multiplier) {
+                    throw user_error("multiplier maximum is too large!");
+                }
                 graph::graph_t nodes_result;
 
                 // 1. start with the words we need at least
