@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
             ("print-graph", "print graph data to stdout")
             ("print-profile", "print OpenCL profiling data to stdout")
             ("no-output", "do not print actual output (for debug reasons)")
-            ("max-chunk-size", po::value(&max_chunk_size)->default_value(16 * 1024 * 1024), "max number of elements that get pushed to GPU per round, eacht element is 4byte")
+            ("max-chunk-size", po::value(&max_chunk_size)->default_value(16 * 1024 * 1024), "max number of elements that get pushed to GPU per round, each element is 4byte")
             ("help", "produce help message")
         ;
 
